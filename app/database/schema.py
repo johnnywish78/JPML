@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 SCHEMA = """
@@ -156,6 +156,76 @@ CREATE TABLE IF NOT EXISTS playback_state (
         REFERENCES media_files(id)
         ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS external_ids (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id, provider),
+    UNIQUE(provider, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS artwork (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    artwork_type TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    provider_path TEXT,
+    local_path TEXT,
+    width INTEGER,
+    height INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id, artwork_type, provider)
+);
+
+CREATE TABLE IF NOT EXISTS metadata_sources (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    fetched_at TEXT,
+    expires_at TEXT,
+    metadata_version TEXT,
+    user_override INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS genres (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS movie_genres (
+    movie_id INTEGER NOT NULL,
+    genre_id INTEGER NOT NULL,
+    PRIMARY KEY(movie_id, genre_id),
+    FOREIGN KEY(movie_id)
+        REFERENCES movies(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(genre_id)
+        REFERENCES genres(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tv_genres (
+    tv_show_id INTEGER NOT NULL,
+    genre_id INTEGER NOT NULL,
+    PRIMARY KEY(tv_show_id, genre_id),
+    FOREIGN KEY(tv_show_id)
+        REFERENCES tv_shows(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(genre_id)
+        REFERENCES genres(id)
+        ON DELETE CASCADE
+);
 """
 
 
@@ -192,6 +262,86 @@ def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
     connection.commit()
 
 
+def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS external_ids (
+            id INTEGER PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entity_type, entity_id, provider),
+            UNIQUE(provider, external_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS artwork (
+            id INTEGER PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            artwork_type TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            provider_path TEXT,
+            local_path TEXT,
+            width INTEGER,
+            height INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entity_type, entity_id, artwork_type, provider)
+        );
+
+        CREATE TABLE IF NOT EXISTS metadata_sources (
+            id INTEGER PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            fetched_at TEXT,
+            expires_at TEXT,
+            metadata_version TEXT,
+            user_override INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(entity_type, entity_id, provider)
+        );
+
+        CREATE TABLE IF NOT EXISTS genres (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS movie_genres (
+            movie_id INTEGER NOT NULL,
+            genre_id INTEGER NOT NULL,
+            PRIMARY KEY(movie_id, genre_id),
+            FOREIGN KEY(movie_id)
+                REFERENCES movies(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(genre_id)
+                REFERENCES genres(id)
+                ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS tv_genres (
+            tv_show_id INTEGER NOT NULL,
+            genre_id INTEGER NOT NULL,
+            PRIMARY KEY(tv_show_id, genre_id),
+            FOREIGN KEY(tv_show_id)
+                REFERENCES tv_shows(id)
+                ON DELETE CASCADE,
+            FOREIGN KEY(genre_id)
+                REFERENCES genres(id)
+                ON DELETE CASCADE
+        );
+        """
+    )
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_version(version) VALUES (3)"
+    )
+    connection.commit()
+
+
 def initialize(connection: sqlite3.Connection) -> None:
     version = _get_schema_version(connection)
 
@@ -205,3 +355,7 @@ def initialize(connection: sqlite3.Connection) -> None:
 
     if version < 2:
         _migrate_v1_to_v2(connection)
+        version = 2
+
+    if version < 3:
+        _migrate_v2_to_v3(connection)
