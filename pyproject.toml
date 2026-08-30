@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jpml"
+version = "0.1.0"
+description = "Johnny's Personal Media Library"
+requires-python = ">=3.14,<3.15"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

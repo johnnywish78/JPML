@@ -1,0 +1,165 @@
+from __future__ import annotations
+
+import sqlite3
+
+
+SCHEMA_VERSION = 1
+
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS movies (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    original_title TEXT,
+    year INTEGER,
+    overview TEXT,
+    runtime_minutes INTEGER,
+    imdb_id TEXT UNIQUE,
+    tmdb_id INTEGER UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tv_shows (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    original_title TEXT,
+    year INTEGER,
+    overview TEXT,
+    imdb_id TEXT UNIQUE,
+    tmdb_id INTEGER UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS seasons (
+    id INTEGER PRIMARY KEY,
+    tv_show_id INTEGER NOT NULL,
+    season_number INTEGER NOT NULL,
+    title TEXT,
+    overview TEXT,
+    UNIQUE(tv_show_id, season_number),
+    FOREIGN KEY (tv_show_id)
+        REFERENCES tv_shows(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS episodes (
+    id INTEGER PRIMARY KEY,
+    season_id INTEGER NOT NULL,
+    episode_number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    overview TEXT,
+    air_date TEXT,
+    imdb_id TEXT UNIQUE,
+    tmdb_id INTEGER UNIQUE,
+    UNIQUE(season_id, episode_number),
+    FOREIGN KEY (season_id)
+        REFERENCES seasons(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS people (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    biography TEXT,
+    imdb_id TEXT UNIQUE,
+    tmdb_id INTEGER UNIQUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS movie_people (
+    movie_id INTEGER NOT NULL,
+    person_id INTEGER NOT NULL,
+    role TEXT,
+    character_name TEXT,
+    PRIMARY KEY(movie_id, person_id, role, character_name),
+    FOREIGN KEY(movie_id)
+        REFERENCES movies(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(person_id)
+        REFERENCES people(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tv_people (
+    tv_show_id INTEGER NOT NULL,
+    person_id INTEGER NOT NULL,
+    role TEXT,
+    character_name TEXT,
+    PRIMARY KEY(tv_show_id, person_id, role, character_name),
+    FOREIGN KEY(tv_show_id)
+        REFERENCES tv_shows(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(person_id)
+        REFERENCES people(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS media_files (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL,
+    extension TEXT,
+    size_bytes INTEGER,
+    duration_seconds REAL,
+    mime_type TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS movie_files (
+    movie_id INTEGER NOT NULL,
+    media_file_id INTEGER NOT NULL,
+    PRIMARY KEY(movie_id, media_file_id),
+    FOREIGN KEY(movie_id)
+        REFERENCES movies(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(media_file_id)
+        REFERENCES media_files(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS episode_files (
+    episode_id INTEGER NOT NULL,
+    media_file_id INTEGER NOT NULL,
+    PRIMARY KEY(episode_id, media_file_id),
+    FOREIGN KEY(episode_id)
+        REFERENCES episodes(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(media_file_id)
+        REFERENCES media_files(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS playback_state (
+    id INTEGER PRIMARY KEY,
+    media_file_id INTEGER NOT NULL UNIQUE,
+    position_seconds REAL NOT NULL DEFAULT 0,
+    completed INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(media_file_id)
+        REFERENCES media_files(id)
+        ON DELETE CASCADE
+);
+"""
+
+
+def initialize(connection: sqlite3.Connection) -> None:
+    connection.executescript(SCHEMA)
+
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO schema_version(version)
+        VALUES (?)
+        """,
+        (SCHEMA_VERSION,),
+    )
+
+    connection.commit()
