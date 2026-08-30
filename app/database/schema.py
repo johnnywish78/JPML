@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 SCHEMA = """
@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS tv_people (
         ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS library_locations (
+    id INTEGER PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    label TEXT,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS media_files (
     id INTEGER PRIMARY KEY,
     path TEXT NOT NULL UNIQUE,
@@ -110,6 +117,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     size_bytes INTEGER,
     duration_seconds REAL,
     mime_type TEXT,
+    is_missing INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -151,15 +159,49 @@ CREATE TABLE IF NOT EXISTS playback_state (
 """
 
 
-def initialize(connection: sqlite3.Connection) -> None:
-    connection.executescript(SCHEMA)
+def _get_schema_version(connection: sqlite3.Connection) -> int:
+    try:
+        row = connection.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        return row[0] if row else 0
+    except sqlite3.OperationalError:
+        return 0
 
+
+def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
     connection.execute(
         """
-        INSERT OR IGNORE INTO schema_version(version)
-        VALUES (?)
-        """,
-        (SCHEMA_VERSION,),
+        CREATE TABLE IF NOT EXISTS library_locations (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            label TEXT,
+            added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
-
+    try:
+        connection.execute(
+            "ALTER TABLE media_files ADD COLUMN is_missing INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_version(version) VALUES (2)"
+    )
     connection.commit()
+
+
+def initialize(connection: sqlite3.Connection) -> None:
+    version = _get_schema_version(connection)
+
+    if version < 1:
+        connection.executescript(SCHEMA)
+        connection.execute(
+            "INSERT OR IGNORE INTO schema_version(version) VALUES (1)"
+        )
+        connection.commit()
+        version = 1
+
+    if version < 2:
+        _migrate_v1_to_v2(connection)

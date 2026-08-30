@@ -28,6 +28,13 @@ def test_database_schema_and_foreign_keys() -> None:
     assert "episodes" in tables
     assert "media_files" in tables
     assert "playback_state" in tables
+    assert "library_locations" in tables
+
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(media_files)").fetchall()
+    }
+    assert "is_missing" in columns
 
     foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
     assert foreign_keys == 1
