@@ -9,8 +9,10 @@ __all__ = [
     "MetadataService",
     "StaticMetadataProvider",
     "ProviderMetadata",
+    "MetadataProviderRegistry",
     "MetadataProvider",
     "identify",
     "normalize_title",
 ]
+from .registry import MetadataProviderRegistry
 from .provider import MetadataProvider, ProviderMetadata, StaticMetadataProvider
