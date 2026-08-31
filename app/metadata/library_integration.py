@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from .identifier import IdentificationResult
 from .service import MetadataResolution, MetadataService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -33,11 +36,19 @@ class LibraryMetadataIntegration:
                 else str(result.media_type)
             )
 
-            fetched = self.metadata_service.fetch_and_save_metadata(
-                entity_type=entity_type,
-                entity_id=resolution.entity_id,
-                external_id=result.external_id,
-            )
+            try:
+                fetched = self.metadata_service.fetch_and_save_metadata(
+                    entity_type=entity_type,
+                    entity_id=resolution.entity_id,
+                    external_id=result.external_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Metadata fetch failed for %s %r: continuing with local entity",
+                    entity_type,
+                    result.external_id,
+                    exc_info=True,
+                )
 
         return LibraryMetadataResult(
             resolution=resolution,

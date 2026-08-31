@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from .identifier import IdentificationResult
 from .repository import MetadataRepository
 from .provider import MetadataProvider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -30,11 +33,7 @@ class MetadataService:
         self,
         result: IdentificationResult,
     ) -> MetadataResolution:
-        entity_type = (
-            result.media_type.value
-            if hasattr(result.media_type, "value")
-            else str(result.media_type)
-        )
+        entity_type = self._normalize_entity_type(result)
 
         if result.provider and result.external_id:
             existing = self.repository.find_by_external_id(
@@ -67,6 +66,17 @@ class MetadataService:
             created=True,
         )
 
+    @staticmethod
+    def _normalize_entity_type(result: IdentificationResult) -> str:
+        media_type = (
+            result.media_type.value
+            if hasattr(result.media_type, "value")
+            else str(result.media_type)
+        )
+        if media_type in ("tv_show", "tv", "episode"):
+            return "tv"
+        return media_type
+
     def save_metadata(
         self,
         *,
@@ -94,6 +104,11 @@ class MetadataService:
         if entity_type == "movie":
             self.repository.set_movie_genres(
                 movie_id=entity_id,
+                genres=list(genres),
+            )
+        elif entity_type == "tv":
+            self.repository.set_tv_genres(
+                tv_show_id=entity_id,
                 genres=list(genres),
             )
 
@@ -154,11 +169,7 @@ class MetadataService:
         title = result.title
         year = result.year
 
-        media_type = (
-            result.media_type.value
-            if hasattr(result.media_type, "value")
-            else str(result.media_type)
-        )
+        media_type = self._normalize_entity_type(result)
 
         if media_type == "movie":
             return self.repository.create_movie(title=title, year=year)

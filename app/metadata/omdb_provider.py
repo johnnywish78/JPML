@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 import requests
 
 from .provider import MetadataProvider, ProviderMetadata
+
+logger = logging.getLogger(__name__)
+
+_IMDB_ID_PATTERN_VALID_PREFIXES = ("tt",)
 
 
 class OMDbMetadataProvider(MetadataProvider):
@@ -37,7 +42,7 @@ class OMDbMetadataProvider(MetadataProvider):
         entity_type: str,
         external_id: str,
     ) -> ProviderMetadata | None:
-        if entity_type != "movie":
+        if entity_type not in ("movie", "tv"):
             return None
 
         if not self.api_key:
@@ -46,23 +51,31 @@ class OMDbMetadataProvider(MetadataProvider):
             )
 
         imdb_id = external_id.strip()
-        if not imdb_id.startswith("tt"):
+        if not imdb_id.startswith(_IMDB_ID_PATTERN_VALID_PREFIXES):
             raise ValueError(
                 f"OMDb provider requires an IMDb ID, got: {external_id!r}"
             )
 
-        response = self.session.get(
-            self.base_url,
-            params={
-                "apikey": self.api_key,
-                "i": imdb_id,
-                "plot": "full",
-            },
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = self.session.get(
+                self.base_url,
+                params={
+                    "apikey": self.api_key,
+                    "i": imdb_id,
+                    "plot": "full",
+                },
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            logger.warning("OMDb API request failed for %s", imdb_id, exc_info=True)
+            raise
 
-        payload: dict[str, Any] = response.json()
+        try:
+            payload: dict[str, Any] = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            logger.warning("OMDb returned malformed JSON for %s", imdb_id)
+            return None
 
         if str(payload.get("Response", "")).lower() != "true":
             return None
@@ -73,9 +86,10 @@ class OMDbMetadataProvider(MetadataProvider):
 
         year = self._parse_year(payload.get("Year"))
 
+        raw_genre = payload.get("Genre") or ""
         genres = tuple(
             genre.strip()
-            for genre in str(payload.get("Genre") or "").split(",")
+            for genre in str(raw_genre).split(",")
             if genre.strip()
         )
 
@@ -97,7 +111,6 @@ class OMDbMetadataProvider(MetadataProvider):
 
         text = str(value).strip()
 
-        # OMDb may return ranges such as "2008–2013".
         first = text[:4]
 
         if first.isdigit() and len(first) == 4:
