@@ -20,6 +20,8 @@ class IdentificationResult:
     album: str | None = None
     track_number: int | None = None
     confidence: float = 0.0
+    provider: str | None = None
+    external_id: str | None = None
     path: str = ""
     raw_title: str = ""
 

@@ -412,3 +412,143 @@ class MetadataRepository:
         ).fetchall()
 
         return [str(row[0]) for row in rows]
+
+
+    def create_movie(self, *, title: str, year: int | None = None) -> int:
+        cursor = self.connection.execute(
+            "INSERT INTO movies(title, year) VALUES (?, ?)",
+            (title, year),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def create_tv_show(self, *, title: str, year: int | None = None) -> int:
+        cursor = self.connection.execute(
+            "INSERT INTO tv_shows(title, year) VALUES (?, ?)",
+            (title, year),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def find_by_external_id(
+        self,
+        *,
+        entity_type: str,
+        provider: str,
+        external_id: str,
+    ) -> int | None:
+        row = self.connection.execute(
+            """
+            SELECT entity_id
+            FROM external_ids
+            WHERE entity_type = ?
+              AND provider = ?
+              AND external_id = ?
+            """,
+            (entity_type, provider, external_id),
+        ).fetchone()
+
+        return int(row["entity_id"]) if row is not None else None
+
+    def set_external_id(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        provider: str,
+        external_id: str,
+        is_primary: bool = False,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO external_ids(
+                entity_type,
+                entity_id,
+                provider,
+                external_id,
+                is_primary
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(entity_type, entity_id, provider)
+            DO UPDATE SET
+                external_id = excluded.external_id,
+                is_primary = excluded.is_primary
+            """,
+            (
+                entity_type,
+                entity_id,
+                provider,
+                external_id,
+                int(is_primary),
+            ),
+        )
+        self.connection.commit()
+
+    def update_entity_metadata(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        title: str | None = None,
+        year: int | None = None,
+        overview: str | None = None,
+    ) -> None:
+        table = {
+            "movie": "movies",
+            "tv": "tv_shows",
+        }.get(entity_type)
+
+        if table is None:
+            raise ValueError(f"Unsupported entity type: {entity_type}")
+
+        self.connection.execute(
+            f"""
+            UPDATE {table}
+            SET title = COALESCE(?, title),
+                year = COALESCE(?, year),
+                overview = COALESCE(?, overview),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (title, year, overview, entity_id),
+        )
+        self.connection.commit()
+
+    def record_metadata_source(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        provider: str,
+        metadata_version: str | None = None,
+        user_override: bool = False,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO metadata_sources(
+                entity_type,
+                entity_id,
+                provider,
+                fetched_at,
+                metadata_version,
+                user_override
+            )
+            VALUES (
+                ?, ?, ?, CURRENT_TIMESTAMP, ?, ?
+            )
+            ON CONFLICT(entity_type, entity_id, provider)
+            DO UPDATE SET
+                fetched_at = CURRENT_TIMESTAMP,
+                metadata_version = excluded.metadata_version,
+                user_override = excluded.user_override,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                entity_type,
+                entity_id,
+                provider,
+                metadata_version,
+                int(user_override),
+            ),
+        )
+        self.connection.commit()
