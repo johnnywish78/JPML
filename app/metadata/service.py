@@ -87,6 +87,14 @@ class MetadataService:
             overview=overview,
         )
 
+        genres = metadata.get("genres") or []
+
+        if entity_type == "movie":
+            self.repository.set_movie_genres(
+                movie_id=entity_id,
+                genres=list(genres),
+            )
+
         self.repository.record_metadata_source(
             entity_type=entity_type,
             entity_id=entity_id,
