@@ -682,3 +682,586 @@ class TestTVLinkingActualSeasonEpisode:
         ).fetchall()
         assert len(episodes) == 1
         assert episodes[0]["episode_number"] == 5
+
+
+class TestPhase5CoordinatorMoviePipeline:
+    def test_full_movie_pipeline_through_coordinator(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+        (lib_dir / "The Matrix (1999).mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_result = sync_location(conn, lib_dir)
+        assert sync_result.files_added == 2
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        proc_result = process_library_metadata(conn, integration=integration)
+
+        assert proc_result.files_processed == 2
+        assert proc_result.entities_created == 2
+        assert proc_result.errors == []
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        assert len(movies) == 2
+
+        movie_files = conn.execute("SELECT * FROM movie_files").fetchall()
+        assert len(movie_files) == 2
+
+    def test_movie_with_external_id_full_coordinator_flow(
+        self, tmp_path: Path
+    ) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "movie:tt1375666": {
+                "title": "Inception",
+                "year": 2010,
+                "genres": ["Sci-Fi"],
+                "external_id": "tt1375666",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["Movies"])
+        id_result.provider = "static"
+        id_result.external_id = "tt1375666"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        lib_result = integration.process_identification(id_result)
+        from app.library.coordinator import _link_media_file
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf["id"],
+            entity_type=lib_result.resolution.entity_type,
+            entity_id=lib_result.resolution.entity_id,
+        )
+
+        movie_id = lib_result.resolution.entity_id
+        eids = repo.list_external_ids("movie", movie_id)
+        assert len(eids) == 1
+        assert eids[0]["external_id"] == "tt1375666"
+
+        genres = repo.get_movie_genres(movie_id)
+        assert "Sci-Fi" in genres
+
+        source = repo.get_metadata_source("movie", movie_id, "static")
+        assert source is not None
+
+
+class TestPhase5CoordinatorTVPipeline:
+    def test_full_tv_pipeline_s01e01(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "TV"
+        lib_dir.mkdir()
+        (lib_dir / "Breaking.Bad.S01E01.720p.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        proc_result = process_library_metadata(
+            conn, integration=integration, parent_parts=["TV Shows"]
+        )
+
+        assert proc_result.files_processed == 1
+        assert proc_result.entities_created == 1
+        assert proc_result.errors == []
+
+        tv_shows = conn.execute("SELECT * FROM tv_shows").fetchall()
+        assert len(tv_shows) == 1
+
+        seasons = conn.execute("SELECT * FROM seasons").fetchall()
+        assert len(seasons) == 1
+        assert seasons[0]["season_number"] == 1
+
+        episodes = conn.execute("SELECT * FROM episodes").fetchall()
+        assert len(episodes) == 1
+        assert episodes[0]["episode_number"] == 1
+
+        ep_files = conn.execute("SELECT * FROM episode_files").fetchall()
+        assert len(ep_files) == 1
+
+    def test_full_tv_pipeline_s02e05(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "TV"
+        lib_dir.mkdir()
+        (lib_dir / "Breaking.Bad.S02E05.720p.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        proc_result = process_library_metadata(
+            conn, integration=integration, parent_parts=["TV Shows"]
+        )
+
+        assert proc_result.files_processed == 1
+        assert proc_result.errors == []
+
+        seasons = conn.execute("SELECT * FROM seasons").fetchall()
+        assert len(seasons) == 1
+        assert seasons[0]["season_number"] == 2
+
+        episodes = conn.execute("SELECT * FROM episodes").fetchall()
+        assert len(episodes) == 1
+        assert episodes[0]["episode_number"] == 5
+
+    def test_tv_with_external_id_full_flow(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "TV"
+        lib_dir.mkdir()
+        (lib_dir / "Show.S01E01.mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "tv:tt1234567": {
+                "title": "Test Show",
+                "year": 2020,
+                "genres": ["Drama", "Thriller"],
+                "external_id": "tt1234567",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["TV Shows"])
+        id_result.provider = "static"
+        id_result.external_id = "tt1234567"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        lib_result = integration.process_identification(id_result)
+        from app.library.coordinator import _link_media_file
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf["id"],
+            entity_type=lib_result.resolution.entity_type,
+            entity_id=lib_result.resolution.entity_id,
+            season=id_result.season,
+            episode=id_result.episode,
+        )
+
+        tv_id = lib_result.resolution.entity_id
+        genres = repo.get_tv_genres(tv_id)
+        assert "Drama" in genres
+        assert "Thriller" in genres
+
+        source = repo.get_metadata_source("tv", tv_id, "static")
+        assert source is not None
+
+
+class TestPhase5CoordinatorIdempotency:
+    def test_process_library_metadata_idempotent(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+        (lib_dir / "Test Movie.mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "movie:tt1375666": {
+                "title": "Inception",
+                "year": 2010,
+                "genres": ["Sci-Fi"],
+                "external_id": "tt1375666",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        result1 = process_library_metadata(conn, integration=integration)
+        result2 = process_library_metadata(conn, integration=integration)
+
+        assert result1.files_processed == 2
+        assert result2.files_processed == 2
+        assert result1.entities_created == 2
+        assert result2.entities_reused == 2
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        assert len(movies) == 2
+
+        movie_files = conn.execute("SELECT * FROM movie_files").fetchall()
+        assert len(movie_files) == 2
+
+    def test_process_tv_metadata_idempotent(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "TV"
+        lib_dir.mkdir()
+        (lib_dir / "Show.S01E01.mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "tv:tt1234567": {
+                "title": "Test Show",
+                "year": 2020,
+                "genres": ["Drama"],
+                "external_id": "tt1234567",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        result1 = process_library_metadata(
+            conn, integration=integration, parent_parts=["TV Shows"]
+        )
+        result2 = process_library_metadata(
+            conn, integration=integration, parent_parts=["TV Shows"]
+        )
+
+        assert result1.files_processed == 1
+        assert result2.files_processed == 1
+        assert result2.entities_reused == 1
+
+        seasons = conn.execute("SELECT * FROM seasons").fetchall()
+        assert len(seasons) == 1
+
+        episodes = conn.execute("SELECT * FROM episodes").fetchall()
+        assert len(episodes) == 1
+
+        ep_files = conn.execute("SELECT * FROM episode_files").fetchall()
+        assert len(ep_files) == 1
+
+
+class TestPhase5CoordinatorPartialFailure:
+    def test_one_identification_failure_does_not_stop_others(
+        self, tmp_path: Path
+    ) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Good Movie.mkv").write_bytes(b"")
+        (lib_dir / "Another Good Movie.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        import app.metadata.identifier as ident_mod
+        original_identify = ident_mod.identify
+
+        call_count = 0
+
+        def patched_identify(scan_result, parent_parts=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("simulated identification failure")
+            return original_identify(scan_result, parent_parts=parent_parts)
+
+        ident_mod.identify = patched_identify
+        try:
+            proc_result = process_library_metadata(
+                conn, integration=integration, parent_parts=["Movies"]
+            )
+
+            assert proc_result.files_processed == 1
+            assert len(proc_result.errors) == 1
+
+            movies = conn.execute("SELECT * FROM movies").fetchall()
+            assert len(movies) == 1
+        finally:
+            ident_mod.identify = original_identify
+
+    def test_provider_failure_does_not_stop_other_files(
+        self, tmp_path: Path
+    ) -> None:
+        class FailingProvider(MetadataProvider):
+            name = "failing"
+
+            def fetch_metadata(self, *, entity_type: str, external_id: str):
+                raise ConnectionError("network down")
+
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Failing Movie.mkv").write_bytes(b"")
+        (lib_dir / "Good Movie.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, provider=FailingProvider())
+        integration = LibraryMetadataIntegration(service)
+
+        proc_result = process_library_metadata(
+            conn, integration=integration, parent_parts=["Movies"]
+        )
+
+        assert proc_result.files_processed == 2
+        assert proc_result.errors == []
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        assert len(movies) == 2
+
+
+class TestPhase5MetadataSource:
+    def test_metadata_source_recorded_with_external_id(
+        self, tmp_path: Path
+    ) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "movie:tt1375666": {
+                "title": "Inception",
+                "year": 2010,
+                "genres": ["Sci-Fi"],
+                "external_id": "tt1375666",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["Movies"])
+        id_result.provider = "static"
+        id_result.external_id = "tt1375666"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        lib_result = integration.process_identification(id_result)
+        from app.library.coordinator import _link_media_file
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf["id"],
+            entity_type=lib_result.resolution.entity_type,
+            entity_id=lib_result.resolution.entity_id,
+        )
+
+        movie_id = lib_result.resolution.entity_id
+        source = repo.get_metadata_source("movie", movie_id, "static")
+        assert source is not None
+        assert source["provider"] == "static"
+
+    def test_metadata_source_upserted_not_duplicated(
+        self, tmp_path: Path
+    ) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "movie:tt1375666": {
+                "title": "Inception",
+                "year": 2010,
+                "genres": ["Sci-Fi"],
+                "external_id": "tt1375666",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["Movies"])
+        id_result.provider = "static"
+        id_result.external_id = "tt1375666"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        integration.process_identification(id_result)
+        integration.process_identification(id_result)
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        movie_id = movies[0]["id"]
+
+        sources = conn.execute(
+            "SELECT * FROM metadata_sources WHERE entity_type = 'movie' AND entity_id = ?",
+            (movie_id,),
+        ).fetchall()
+        assert len(sources) == 1
+
+    def test_tv_metadata_source_recorded(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "TV"
+        lib_dir.mkdir()
+        (lib_dir / "Show.S01E01.mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "tv:tt1234567": {
+                "title": "Test Show",
+                "year": 2020,
+                "genres": ["Drama"],
+                "external_id": "tt1234567",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["TV Shows"])
+        id_result.provider = "static"
+        id_result.external_id = "tt1234567"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        lib_result = integration.process_identification(id_result)
+        from app.library.coordinator import _link_media_file
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf["id"],
+            entity_type=lib_result.resolution.entity_type,
+            entity_id=lib_result.resolution.entity_id,
+            season=id_result.season,
+            episode=id_result.episode,
+        )
+
+        tv_id = lib_result.resolution.entity_id
+        source = repo.get_metadata_source("tv", tv_id, "static")
+        assert source is not None
+        assert source["provider"] == "static"
+
+
+class TestPhase5MixedLibrary:
+    def test_mixed_movie_and_tv_files(self, tmp_path: Path) -> None:
+        movie_dir = tmp_path / "Movies"
+        movie_dir.mkdir()
+        (movie_dir / "Inception (2010).mkv").write_bytes(b"")
+
+        tv_dir = tmp_path / "TV"
+        tv_dir.mkdir()
+        (tv_dir / "Breaking.Bad.S01E01.720p.mkv").write_bytes(b"")
+
+        provider = StaticMetadataProvider({
+            "movie:tt1375666": {
+                "title": "Inception",
+                "year": 2010,
+                "genres": ["Sci-Fi"],
+                "external_id": "tt1375666",
+            },
+            "tv:tt0903747": {
+                "title": "Breaking Bad",
+                "year": 2008,
+                "genres": ["Drama"],
+                "external_id": "tt0903747",
+            },
+        })
+        registry = MetadataProviderRegistry()
+        registry.register(provider)
+
+        conn = _connection()
+        sync_location(conn, movie_dir)
+        sync_location(conn, tv_dir)
+
+        assert MediaRepository(conn).count() == 2
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, registry=registry)
+        integration = LibraryMetadataIntegration(service)
+
+        proc_result = process_library_metadata(conn, integration=integration)
+
+        assert proc_result.files_processed == 2
+        assert proc_result.entities_created == 2
+        assert proc_result.errors == []
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        assert len(movies) == 1
+
+        tv_shows = conn.execute("SELECT * FROM tv_shows").fetchall()
+        assert len(tv_shows) == 1
+
+        movie_files = conn.execute("SELECT * FROM movie_files").fetchall()
+        assert len(movie_files) == 1
+
+        ep_files = conn.execute("SELECT * FROM episode_files").fetchall()
+        assert len(ep_files) == 1

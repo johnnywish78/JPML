@@ -75,6 +75,21 @@ def sync_location(
     return result
 
 
+def _is_media_file_linked(connection: sqlite3.Connection, media_file_id: int) -> bool:
+    """Check if a media file is already linked to a movie or episode."""
+    row = connection.execute(
+        "SELECT 1 FROM movie_files WHERE media_file_id = ? LIMIT 1",
+        (media_file_id,),
+    ).fetchone()
+    if row is not None:
+        return True
+    row = connection.execute(
+        "SELECT 1 FROM episode_files WHERE media_file_id = ? LIMIT 1",
+        (media_file_id,),
+    ).fetchone()
+    return row is not None
+
+
 def process_library_metadata(
     connection: sqlite3.Connection,
     *,
@@ -89,6 +104,7 @@ def process_library_metadata(
     3. Link media file to the resolved movie/tv entity
 
     This function is idempotent: running it twice produces the same result.
+    Already-linked files are skipped on subsequent runs.
     """
     from app.metadata.identifier import identify
     from app.library.scanner import ScanResult as SR
@@ -100,6 +116,12 @@ def process_library_metadata(
 
     for mf in all_files:
         if mf.id is None:
+            continue
+
+        if _is_media_file_linked(connection, mf.id):
+            result.files_processed += 1
+            result.entities_reused += 1
+            result.metadata_skipped += 1
             continue
 
         try:
