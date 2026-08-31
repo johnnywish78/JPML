@@ -9,6 +9,17 @@ from .service import MetadataResolution, MetadataService
 logger = logging.getLogger(__name__)
 
 
+def _normalize_entity_type_for_provider(media_type) -> str:
+    media_type_str = (
+        media_type.value
+        if hasattr(media_type, "value")
+        else str(media_type)
+    )
+    if media_type_str in ("tv_show", "tv", "episode"):
+        return "tv"
+    return media_type_str
+
+
 @dataclass(frozen=True)
 class LibraryMetadataResult:
     resolution: MetadataResolution
@@ -30,17 +41,14 @@ class LibraryMetadataIntegration:
         fetched = False
 
         if result.external_id:
-            entity_type = (
-                result.media_type.value
-                if hasattr(result.media_type, "value")
-                else str(result.media_type)
-            )
+            entity_type = _normalize_entity_type_for_provider(result.media_type)
 
             try:
                 fetched = self.metadata_service.fetch_and_save_metadata(
                     entity_type=entity_type,
                     entity_id=resolution.entity_id,
                     external_id=result.external_id,
+                    provider_name=result.provider,
                 )
             except Exception:
                 logger.warning(

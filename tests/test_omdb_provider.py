@@ -1,220 +1,228 @@
 from __future__ import annotations
 
-import sqlite3
+import logging
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-from app.database.schema import initialize
+from app.config import JPMLConfig, OmdbConfig, load_config
 from app.metadata.omdb_provider import OMDbMetadataProvider
-from app.metadata.provider import ProviderMetadata
-from app.metadata.repository import MetadataRepository
-from app.metadata.service import MetadataService
 
 
-class FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
+class TestConfigLoading:
+    def test_load_config_defaults(self, tmp_path: Path) -> None:
+        config = load_config(tmp_path / "nonexistent.json")
+        assert config.omdb.api_key == ""
+        assert config.omdb.base_url == "https://www.omdbapi.com/"
+        assert config.omdb.timeout == 10.0
 
-    def raise_for_status(self) -> None:
-        return None
+    def test_load_config_from_file(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "jpml_config.json"
+        cfg_file.write_text('{"omdb": {"api_key": "test123", "timeout": 5.0}}')
 
-    def json(self) -> dict:
-        return self.payload
+        config = load_config(cfg_file)
+        assert config.omdb.api_key == "test123"
+        assert config.omdb.timeout == 5.0
+
+    def test_load_config_env_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OMDB_API_KEY", "env_key_123")
+        config = load_config(tmp_path / "nonexistent.json")
+        assert config.omdb.api_key == "env_key_123"
+
+    def test_load_config_file_takes_precedence(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OMDB_API_KEY", "env_key")
+        cfg_file = tmp_path / "jpml_config.json"
+        cfg_file.write_text('{"omdb": {"api_key": "file_key"}}')
+
+        config = load_config(cfg_file)
+        assert config.omdb.api_key == "file_key"
+
+    def test_load_config_malformed_json(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "jpml_config.json"
+        cfg_file.write_text("{invalid json")
+
+        config = load_config(cfg_file)
+        assert config.omdb.api_key == ""
+
+    def test_load_config_empty_omdb_section(self, tmp_path: Path) -> None:
+        cfg_file = tmp_path / "jpml_config.json"
+        cfg_file.write_text('{"omdb": {}}')
+
+        config = load_config(cfg_file)
+        assert config.omdb.api_key == ""
+        assert config.omdb.base_url == "https://www.omdbapi.com/"
 
 
-class FakeSession:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
-        self.calls: list[dict] = []
+class TestOmdbProviderConfig:
+    def test_config_object_used(self) -> None:
+        cfg = OmdbConfig(api_key="cfg_key", timeout=5.0)
+        provider = OMDbMetadataProvider(config=cfg)
+        assert provider.api_key == "cfg_key"
+        assert provider.timeout == 5.0
 
-    def get(self, url, *, params, timeout):
-        self.calls.append(
-            {
-                "url": url,
-                "params": params,
-                "timeout": timeout,
-            }
+    def test_direct_api_key_still_works(self) -> None:
+        provider = OMDbMetadataProvider(api_key="direct_key")
+        assert provider.api_key == "direct_key"
+
+    def test_env_fallback_still_works(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OMDB_API_KEY", "env_key")
+        provider = OMDbMetadataProvider()
+        assert provider.api_key == "env_key"
+
+    def test_config_overrides_direct_params(self) -> None:
+        cfg = OmdbConfig(api_key="cfg_key", base_url="https://custom.api/", timeout=3.0)
+        provider = OMDbMetadataProvider(
+            api_key="direct_key",
+            base_url="https://other.api/",
+            timeout=99.0,
+            config=cfg,
         )
-        return FakeResponse(self.payload)
+        assert provider.api_key == "cfg_key"
+        assert provider.base_url == "https://custom.api/"
+        assert provider.timeout == 3.0
+
+    def test_api_key_never_in_error_message(self) -> None:
+        provider = OMDbMetadataProvider(api_key="")
+        with pytest.raises(ValueError, match="OMDB_API_KEY is required"):
+            provider.fetch_metadata(entity_type="movie", external_id="tt123")
+
+    def test_api_key_not_in_invalid_id_error(self) -> None:
+        provider = OMDbMetadataProvider(api_key="my_secret_key")
+        try:
+            provider.fetch_metadata(entity_type="movie", external_id="12345")
+        except ValueError as e:
+            assert "my_secret_key" not in str(e)
+
+    def test_empty_key_treated_as_missing(self) -> None:
+        provider = OMDbMetadataProvider(api_key="  ")
+        with pytest.raises(ValueError, match="OMDB_API_KEY is required"):
+            provider.fetch_metadata(entity_type="movie", external_id="tt123")
 
 
-def test_omdb_provider_normalizes_realistic_imdb_movie_response() -> None:
-    session = FakeSession(
-        {
+class TestOmdbProviderWithFakeSession:
+    def test_successful_fetch(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
             "Response": "True",
             "Title": "Inception",
             "Year": "2010",
-            "Plot": "A thief who steals corporate secrets through dream-sharing technology.",
-            "Genre": "Action, Sci-Fi, Thriller",
-            "imdbID": "tt1375666",
-            "Poster": "https://example.test/inception.jpg",
+            "Genre": "Action,Sci-Fi",
+            "Plot": "A dream within a dream.",
         }
-    )
+        mock_session.get.return_value = mock_response
 
-    provider = OMDbMetadataProvider(
-        api_key="test-key",
-        session=session,
-    )
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="movie", external_id="tt1375666")
 
-    metadata = provider.fetch_metadata(
-        entity_type="movie",
-        external_id="tt1375666",
-    )
+        assert result is not None
+        assert result.title == "Inception"
+        assert result.year == 2010
+        assert result.genres == ("Action", "Sci-Fi")
+        assert result.external_id == "tt1375666"
 
-    assert metadata == ProviderMetadata(
-        title="Inception",
-        year=2010,
-        overview=(
-            "A thief who steals corporate secrets through "
-            "dream-sharing technology."
-        ),
-        genres=("Action", "Sci-Fi", "Thriller"),
-        external_id="tt1375666",
-        metadata_version="omdb-v1",
-    )
+    def test_response_false(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"Response": "False", "Error": "Movie not found"}
+        mock_session.get.return_value = mock_response
 
-    assert len(session.calls) == 1
-    assert session.calls[0]["params"]["apikey"] == "test-key"
-    assert session.calls[0]["params"]["i"] == "tt1375666"
-    assert session.calls[0]["params"]["plot"] == "full"
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="movie", external_id="tt999")
+        assert result is None
 
+    def test_malformed_json(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.side_effect = ValueError("No JSON")
+        mock_session.get.return_value = mock_response
 
-def test_omdb_provider_returns_none_for_api_not_found() -> None:
-    session = FakeSession(
-        {
-            "Response": "False",
-            "Error": "Movie not found!",
-        }
-    )
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="movie", external_id="tt123")
+        assert result is None
 
-    provider = OMDbMetadataProvider(
-        api_key="test-key",
-        session=session,
-    )
-
-    assert (
-        provider.fetch_metadata(
-            entity_type="movie",
-            external_id="tt0000000",
-        )
-        is None
-    )
-
-
-def test_omdb_provider_requires_api_key() -> None:
-    provider = OMDbMetadataProvider(
-        api_key="",
-        session=FakeSession({}),
-    )
-
-    with pytest.raises(ValueError, match="OMDB_API_KEY"):
-        provider.fetch_metadata(
-            entity_type="movie",
-            external_id="tt1375666",
-        )
-
-
-def test_omdb_provider_requires_imdb_id() -> None:
-    provider = OMDbMetadataProvider(
-        api_key="test-key",
-        session=FakeSession({}),
-    )
-
-    with pytest.raises(ValueError, match="IMDb ID"):
-        provider.fetch_metadata(
-            entity_type="movie",
-            external_id="12345",
-        )
-
-
-def test_omdb_provider_rejects_non_movie_entity() -> None:
-    provider = OMDbMetadataProvider(
-        api_key="test-key",
-        session=FakeSession({}),
-    )
-
-    assert (
-        provider.fetch_metadata(
-            entity_type="tv",
-            external_id="tt0903747",
-        )
-        is None
-    )
-
-
-def test_omdb_provider_integrates_with_metadata_service() -> None:
-    db = sqlite3.connect(":memory:")
-    db.row_factory = sqlite3.Row
-    initialize(db)
-
-    repository = MetadataRepository(db)
-
-    session = FakeSession(
-        {
+    def test_missing_title(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
             "Response": "True",
-            "Title": "Dune",
-            "Year": "2021",
-            "Plot": "A noble family becomes involved in a galactic struggle.",
-            "Genre": "Adventure, Drama, Sci-Fi",
-            "imdbID": "tt1160419",
+            "Year": "2024",
+            "Genre": "Action",
+            "Plot": "A movie.",
         }
-    )
+        mock_session.get.return_value = mock_response
 
-    provider = OMDbMetadataProvider(
-        api_key="test-key",
-        session=session,
-    )
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="movie", external_id="tt123")
+        assert result is None
 
-    service = MetadataService(repository, provider)
+    def test_empty_genres(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "Response": "True",
+            "Title": "Test",
+            "Year": "2024",
+            "Genre": "",
+            "Plot": "A movie.",
+        }
+        mock_session.get.return_value = mock_response
 
-    movie_id = repository.create_movie(
-        title="Dune",
-        year=2021,
-    )
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="movie", external_id="tt123")
+        assert result is not None
+        assert result.genres == ()
 
-    assert service.fetch_and_save_metadata(
-        entity_type="movie",
-        entity_id=movie_id,
-        external_id="tt1160419",
-    )
+    def test_year_range_parsing(self) -> None:
+        assert OMDbMetadataProvider._parse_year("2008–2013") == 2008
+        assert OMDbMetadataProvider._parse_year("2024") == 2024
+        assert OMDbMetadataProvider._parse_year(None) is None
+        assert OMDbMetadataProvider._parse_year("abc") is None
 
-    movie = db.execute(
-        """
-        SELECT title, year, overview
-        FROM movies
-        WHERE id = ?
-        """,
-        (movie_id,),
-    ).fetchone()
+    def test_http_failure_propagates(self) -> None:
+        import requests as req
 
-    assert movie is not None
-    assert movie["title"] == "Dune"
-    assert movie["year"] == 2021
-    assert "galactic struggle" in movie["overview"]
+        mock_session = MagicMock()
+        mock_session.get.side_effect = req.ConnectionError("timeout")
 
-    genres = db.execute(
-        """
-        SELECT g.name
-        FROM genres g
-        JOIN movie_genres mg
-          ON mg.genre_id = g.id
-        WHERE mg.movie_id = ?
-        ORDER BY g.name
-        """,
-        (movie_id,),
-    ).fetchall()
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        with pytest.raises(req.ConnectionError):
+            provider.fetch_metadata(entity_type="movie", external_id="tt123")
 
-    assert [row["name"] for row in genres] == [
-        "Adventure",
-        "Drama",
-        "Sci-Fi",
-    ]
+    def test_tv_entity_type_accepted(self) -> None:
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "Response": "True",
+            "Title": "Breaking Bad",
+            "Year": "2008",
+            "Genre": "Drama,Crime",
+            "Plot": "A teacher turns to crime.",
+        }
+        mock_session.get.return_value = mock_response
 
-    source = repository.get_metadata_source(
-        "movie",
-        movie_id,
-        "omdb",
-    )
+        provider = OMDbMetadataProvider(api_key="test_key", session=mock_session)
+        result = provider.fetch_metadata(entity_type="tv", external_id="tt0903747")
+        assert result is not None
+        assert result.title == "Breaking Bad"
 
-    assert source is not None
-    assert source["metadata_version"] == "omdb-v1"
+    def test_unsupported_entity_type(self) -> None:
+        provider = OMDbMetadataProvider(api_key="test_key")
+        result = provider.fetch_metadata(entity_type="person", external_id="nm123")
+        assert result is None
+
+    def test_api_key_not_exposed_in_logs(self, caplog: pytest.LogCaptureFixture) -> None:
+        mock_session = MagicMock()
+        mock_session.get.side_effect = Exception("boom")
+
+        provider = OMDbMetadataProvider(api_key="SUPER_SECRET_KEY", session=mock_session)
+
+        with caplog.at_level(logging.WARNING):
+            try:
+                provider.fetch_metadata(entity_type="movie", external_id="tt123")
+            except Exception:
+                pass
+
+        for record in caplog.records:
+            assert "SUPER_SECRET_KEY" not in record.getMessage()

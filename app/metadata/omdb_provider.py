@@ -6,6 +6,8 @@ from typing import Any
 
 import requests
 
+from app.config import OmdbConfig
+
 from .provider import MetadataProvider, ProviderMetadata
 
 logger = logging.getLogger(__name__)
@@ -25,15 +27,21 @@ class OMDbMetadataProvider(MetadataProvider):
         base_url: str = "https://www.omdbapi.com/",
         timeout: float = 10.0,
         session: requests.Session | None = None,
+        config: OmdbConfig | None = None,
     ) -> None:
-        self.api_key = (
-            api_key
-            if api_key is not None
-            else os.environ.get("OMDB_API_KEY", "")
-        ).strip()
+        if config is not None:
+            self.api_key = config.api_key.strip()
+            self.base_url = config.base_url
+            self.timeout = config.timeout
+        else:
+            self.api_key = (
+                api_key
+                if api_key is not None
+                else os.environ.get("OMDB_API_KEY", "")
+            ).strip()
+            self.base_url = base_url
+            self.timeout = timeout
 
-        self.base_url = base_url
-        self.timeout = timeout
         self.session = session or requests.Session()
 
     def fetch_metadata(

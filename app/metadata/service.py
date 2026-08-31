@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .identifier import IdentificationResult
+from .registry import MetadataProviderRegistry
 from .repository import MetadataRepository
 from .provider import MetadataProvider
 
@@ -25,9 +26,31 @@ class MetadataService:
         self,
         repository: MetadataRepository,
         provider: MetadataProvider | None = None,
+        registry: MetadataProviderRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.provider = provider
+        self.registry = registry
+
+    def _resolve_provider(
+        self,
+        provider_name: str | None,
+        fallback: MetadataProvider | None = None,
+    ) -> MetadataProvider | None:
+        if provider_name and self.registry and self.registry.has(provider_name):
+            return self.registry.get(provider_name)
+        return fallback or self.provider
+
+    def _select_provider(
+        self,
+        provider: MetadataProvider | None,
+        provider_name: str | None,
+    ) -> MetadataProvider | None:
+        if provider is not None:
+            return provider
+        if provider_name and self.registry and self.registry.has(provider_name):
+            return self.registry.get(provider_name)
+        return self.provider
 
     def resolve_identification(
         self,
@@ -128,6 +151,7 @@ class MetadataService:
         entity_id: int,
         external_id: str,
         provider: MetadataProvider | None = None,
+        provider_name: str | None = None,
         user_override: bool = False,
     ) -> bool:
         """Fetch provider metadata and persist it.
@@ -135,7 +159,7 @@ class MetadataService:
         Returns True when metadata was fetched and saved, False when
         the provider has no record for the requested external ID.
         """
-        active_provider = provider or self.provider
+        active_provider = self._select_provider(provider, provider_name)
         if active_provider is None:
             raise ValueError("metadata provider is required")
 
