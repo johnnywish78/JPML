@@ -11,7 +11,12 @@ from app.metadata.omdb_provider import OMDbMetadataProvider
 
 
 class TestConfigLoading:
-    def test_load_config_defaults(self, tmp_path: Path) -> None:
+    def test_load_config_defaults(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("OMDB_API_KEY", raising=False)
         config = load_config(tmp_path / "nonexistent.json")
         assert config.omdb.api_key == ""
         assert config.omdb.base_url == "https://www.omdbapi.com/"
@@ -38,14 +43,24 @@ class TestConfigLoading:
         config = load_config(cfg_file)
         assert config.omdb.api_key == "file_key"
 
-    def test_load_config_malformed_json(self, tmp_path: Path) -> None:
+    def test_load_config_malformed_json(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("OMDB_API_KEY", raising=False)
         cfg_file = tmp_path / "jpml_config.json"
         cfg_file.write_text("{invalid json")
 
         config = load_config(cfg_file)
         assert config.omdb.api_key == ""
 
-    def test_load_config_empty_omdb_section(self, tmp_path: Path) -> None:
+    def test_load_config_empty_omdb_section(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("OMDB_API_KEY", raising=False)
         cfg_file = tmp_path / "jpml_config.json"
         cfg_file.write_text('{"omdb": {}}')
 

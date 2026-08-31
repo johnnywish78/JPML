@@ -122,6 +122,27 @@ class MetadataService:
             overview=overview,
         )
 
+        external_id = metadata.get("external_id")
+
+        if external_id:
+            existing_external_ids = self.repository.list_external_ids(
+                entity_type,
+                entity_id,
+            )
+            known_external_ids = {
+                item["external_id"]
+                for item in existing_external_ids
+            }
+
+            if str(external_id) not in known_external_ids:
+                self.repository.set_external_id(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    provider=provider,
+                    external_id=str(external_id),
+                    is_primary=True,
+                )
+
         genres = metadata.get("genres") or []
 
         if entity_type == "movie":
