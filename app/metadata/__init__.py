@@ -8,6 +8,8 @@ __all__ = [
     "MetadataRepository",
     "MetadataResolution",
     "MetadataService",
+    "LibraryMetadataIntegration",
+    "LibraryMetadataResult",
     "StaticMetadataProvider",
     "ProviderMetadata",
     "MetadataProviderRegistry",
@@ -18,3 +20,4 @@ __all__ = [
 from .registry import MetadataProviderRegistry
 from .omdb_provider import OMDbMetadataProvider
 from .provider import MetadataProvider, ProviderMetadata, StaticMetadataProvider
+from .library_integration import LibraryMetadataIntegration, LibraryMetadataResult

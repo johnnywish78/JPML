@@ -36,28 +36,30 @@ class MetadataService:
             else str(result.media_type)
         )
 
-        existing = self.repository.find_by_external_id(
-            entity_type=entity_type,
-            provider=result.provider,
-            external_id=result.external_id,
-        )
-
-        if existing is not None:
-            return MetadataResolution(
+        if result.provider and result.external_id:
+            existing = self.repository.find_by_external_id(
                 entity_type=entity_type,
-                entity_id=existing,
-                created=False,
+                provider=result.provider,
+                external_id=result.external_id,
             )
+
+            if existing is not None:
+                return MetadataResolution(
+                    entity_type=entity_type,
+                    entity_id=existing,
+                    created=False,
+                )
 
         entity_id = self._create_entity(result)
 
-        self.repository.set_external_id(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            provider=result.provider,
-            external_id=result.external_id,
-            is_primary=True,
-        )
+        if result.provider and result.external_id:
+            self.repository.set_external_id(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                provider=result.provider,
+                external_id=result.external_id,
+                is_primary=True,
+            )
 
         return MetadataResolution(
             entity_type=entity_type,
