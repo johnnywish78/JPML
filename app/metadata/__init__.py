@@ -7,6 +7,10 @@ __all__ = [
     "MetadataRepository",
     "MetadataResolution",
     "MetadataService",
+    "StaticMetadataProvider",
+    "ProviderMetadata",
+    "MetadataProvider",
     "identify",
     "normalize_title",
 ]
+from .provider import MetadataProvider, ProviderMetadata, StaticMetadataProvider
