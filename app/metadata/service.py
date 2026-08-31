@@ -5,6 +5,7 @@ from typing import Any
 
 from .identifier import IdentificationResult
 from .repository import MetadataRepository
+from .provider import MetadataProvider
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,13 @@ class MetadataResolution:
 class MetadataService:
     """Application service coordinating identification and metadata persistence."""
 
-    def __init__(self, repository: MetadataRepository) -> None:
+    def __init__(
+        self,
+        repository: MetadataRepository,
+        provider: MetadataProvider | None = None,
+    ) -> None:
         self.repository = repository
+        self.provider = provider
 
     def resolve_identification(
         self,
@@ -88,6 +94,51 @@ class MetadataService:
             metadata_version=metadata_version,
             user_override=user_override,
         )
+
+
+    def fetch_and_save_metadata(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        external_id: str,
+        provider: MetadataProvider | None = None,
+        user_override: bool = False,
+    ) -> bool:
+        """Fetch provider metadata and persist it.
+
+        Returns True when metadata was fetched and saved, False when
+        the provider has no record for the requested external ID.
+        """
+        active_provider = provider or self.provider
+        if active_provider is None:
+            raise ValueError("metadata provider is required")
+
+        metadata = active_provider.fetch_metadata(
+            entity_type=entity_type,
+            external_id=external_id,
+        )
+
+        if metadata is None:
+            return False
+
+        self.save_metadata(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            provider=active_provider.name,
+            metadata={
+                "title": metadata.title,
+                "year": metadata.year,
+                "overview": metadata.overview,
+                "genres": list(metadata.genres),
+                "external_id": metadata.external_id,
+                "metadata_version": metadata.metadata_version,
+            },
+            metadata_version=metadata.metadata_version,
+            user_override=user_override,
+        )
+
+        return True
 
     def _create_entity(self, result: IdentificationResult) -> int:
         title = result.title
