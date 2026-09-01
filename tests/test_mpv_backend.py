@@ -3,14 +3,39 @@ from __future__ import annotations
 import os
 import tempfile
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
-from app.player import AudioTrack, MediaInfo, PlaybackCallbacks, SubtitleTrack, VideoTrack
-from app.player.vlc_backend import (
-    BACKEND_NAME,
-    VLCPlayerBackend,
+from app.player import (
+    AudioTrack,
+    MediaInfo,
+    PlaybackCallbacks,
+    SubtitleTrack,
+    VideoTrack,
+)
+from app.player.mpv_backend import BACKEND_NAME, MPVPlayerBackend
+
+
+# ---------------------------------------------------------------------------
+# Skip entire module if python-mpv cannot create instances
+# ---------------------------------------------------------------------------
+
+def _mpv_available() -> bool:
+    try:
+        import mpv as _mpv
+        p = _mpv.MPV()
+        p.terminate()
+        return True
+    except Exception:
+        return False
+
+
+MPV_AVAILABLE = _mpv_available()
+
+pytestmark = pytest.mark.skipif(
+    not MPV_AVAILABLE,
+    reason="python-mpv or libmpv not available",
 )
 
 
@@ -25,8 +50,8 @@ def _make_temp_media(suffix: str = ".mkv") -> str:
     return path
 
 
-def _make_backend(**kwargs) -> VLCPlayerBackend:
-    return VLCPlayerBackend(vlc_args=["--quiet", "--no-xlib"], **kwargs)
+def _make_backend(**kwargs) -> MPVPlayerBackend:
+    return MPVPlayerBackend(mpv_args=[], **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +65,7 @@ class TestCreation:
         backend.release()
 
     def test_backend_name(self) -> None:
-        assert BACKEND_NAME == "vlc"
+        assert BACKEND_NAME == "mpv"
 
     def test_initial_state_queries(self) -> None:
         backend = _make_backend()
@@ -156,8 +181,6 @@ class TestLifecycle:
     def test_release_makes_unusable(self) -> None:
         backend = _make_backend()
         backend.release()
-        # After release the backend should not crash __del__
-        # (but methods would fail - we just test release itself works)
         assert True
 
 
@@ -173,11 +196,8 @@ class TestPlaybackControls:
             backend.open(path)
             backend.play()
             time.sleep(0.3)
-            # A null-byte file may not actually play, so just verify
-            # play() does not crash and state queries remain safe.
             backend.pause()
             time.sleep(0.1)
-            # State may be Stopped or Paused for an invalid file.
             assert backend.is_open() is True
         finally:
             backend.close()
@@ -194,7 +214,6 @@ class TestPlaybackControls:
             time.sleep(0.1)
             backend.toggle_pause()
             time.sleep(0.1)
-            # Just verify no crash for invalid media.
             assert backend.is_open() is True
         finally:
             backend.close()
@@ -556,7 +575,6 @@ class TestEmbeddedVideo:
         backend = _make_backend()
         try:
             backend.open(path)
-            # Passing a fake window id should not crash
             backend.set_video_window_id(0)
         finally:
             backend.close()
@@ -601,12 +619,11 @@ class TestCallbacks:
 
     def test_default_callbacks_no_crash(self) -> None:
         backend = _make_backend()
-        # The internal callbacks should be callable without errors
-        backend._on_end_reached(None)
-        backend._on_error(None)
-        backend._on_playing(None)
-        backend._on_paused(None)
-        backend._on_stopped(None)
+        backend._on_eof("eof-reached", None)
+        backend._on_eof("eof-reached", False)
+        backend._on_pause_changed("pause", None)
+        backend._on_core_idle("core-idle", None)
+        backend._on_core_idle("core-idle", False)
         backend.release()
 
     def test_callback_exception_does_not_crash(self) -> None:
@@ -615,15 +632,14 @@ class TestCallbacks:
 
         cb = PlaybackCallbacks(on_end_reached=bad_cb)
         backend = _make_backend(callbacks=cb)
-        # Should not raise
-        backend._on_end_reached(None)
+        backend._on_eof("eof-reached", True)
         backend.release()
 
     def test_end_reached_callback_fires(self) -> None:
         called = []
         cb = PlaybackCallbacks(on_end_reached=lambda: called.append(True))
         backend = _make_backend(callbacks=cb)
-        backend._on_end_reached(None)
+        backend._on_eof("eof-reached", True)
         assert called == [True]
         backend.release()
 
@@ -631,18 +647,10 @@ class TestCallbacks:
         called = []
         cb = PlaybackCallbacks(on_state_changed=lambda s: called.append(s))
         backend = _make_backend(callbacks=cb)
-        backend._on_playing(None)
-        backend._on_paused(None)
-        backend._on_stopped(None)
-        assert called == ["playing", "paused", "stopped"]
-        backend.release()
-
-    def test_error_callback_fires(self) -> None:
-        called = []
-        cb = PlaybackCallbacks(on_error=lambda m: called.append(m))
-        backend = _make_backend(callbacks=cb)
-        backend._on_error(None)
-        assert called == ["VLC playback error"]
+        backend._on_pause_changed("pause", True)
+        backend._on_pause_changed("pause", False)
+        backend._on_core_idle("core-idle", True)
+        assert called == ["paused", "playing", "stopped"]
         backend.release()
 
 
@@ -736,16 +744,16 @@ class TestDataObjects:
 
 
 # ---------------------------------------------------------------------------
-# P. Real libVLC integration (skipped if media unavailable)
+# P. Real MPV integration (skipped if media unavailable)
 # ---------------------------------------------------------------------------
 
-class TestRealLibVLCIntegration:
-    """Integration tests that exercise actual libVLC with a real file."""
+class TestRealMPVIntegration:
+    """Integration tests that exercise actual libmpv with a real file."""
 
     TEST_FILE = "/run/media/johnny/Movies/Le_Cercle_Rouge.1970.mkv"
 
     @pytest.fixture()
-    def backend(self) -> VLCPlayerBackend:
+    def backend(self) -> MPVPlayerBackend:
         b = _make_backend()
         yield b
         try:
@@ -758,25 +766,25 @@ class TestRealLibVLCIntegration:
         if not os.path.exists(self.TEST_FILE):
             pytest.skip("test media file not available")
 
-    def test_real_open_and_play(self, backend: VLCPlayerBackend) -> None:
+    def test_real_open_and_play(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.0)
         assert backend.is_open() is True
-        assert backend.is_playing() is True
+        assert backend.is_paused() is True
 
-    def test_real_pause_resume(self, backend: VLCPlayerBackend) -> None:
+    def test_real_pause_resume(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.0)
+        backend.play()
+        time.sleep(0.5)
+        assert backend.is_playing() is True
         backend.pause()
         time.sleep(0.3)
         assert backend.is_paused() is True
-        backend.play()
-        time.sleep(0.3)
-        assert backend.is_playing() is True
 
-    def test_real_seek(self, backend: VLCPlayerBackend) -> None:
+    def test_real_seek(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.5)
@@ -787,28 +795,28 @@ class TestRealLibVLCIntegration:
         pos = backend.get_position()
         assert pos > 0
 
-    def test_real_duration(self, backend: VLCPlayerBackend) -> None:
+    def test_real_duration(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.5)
         dur = backend.get_duration()
-        assert dur > 8000  # Le Cercle Rouge is ~2h20m
+        assert dur > 8000
 
-    def test_real_audio_tracks(self, backend: VLCPlayerBackend) -> None:
+    def test_real_audio_tracks(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.5)
         tracks = backend.get_audio_tracks()
         assert len(tracks) >= 1
 
-    def test_real_subtitle_tracks(self, backend: VLCPlayerBackend) -> None:
+    def test_real_subtitle_tracks(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.5)
         tracks = backend.get_subtitle_tracks()
         assert len(tracks) >= 1
 
-    def test_real_video_size(self, backend: VLCPlayerBackend) -> None:
+    def test_real_video_size(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.5)
@@ -817,14 +825,14 @@ class TestRealLibVLCIntegration:
         assert size[0] > 0
         assert size[1] > 0
 
-    def test_real_playback_rate(self, backend: VLCPlayerBackend) -> None:
+    def test_real_playback_rate(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.0)
         backend.set_playback_rate(2.0)
         assert backend.get_playback_rate() == 2.0
 
-    def test_real_volume(self, backend: VLCPlayerBackend) -> None:
+    def test_real_volume(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.0)
@@ -833,7 +841,7 @@ class TestRealLibVLCIntegration:
         vol = backend.get_volume()
         assert abs(vol - 0.3) < 0.1
 
-    def test_real_stop_and_reopen(self, backend: VLCPlayerBackend) -> None:
+    def test_real_stop_and_reopen(self, backend: MPVPlayerBackend) -> None:
         self._skip_if_no_media()
         backend.open(self.TEST_FILE)
         time.sleep(1.0)

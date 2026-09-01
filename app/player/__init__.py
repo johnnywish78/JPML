@@ -1,7 +1,59 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Protocol
+
+
+# ---------------------------------------------------------------------------
+# Shared value objects (used by all backend implementations)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AudioTrack:
+    id: int
+    name: str
+    language: str | None = None
+
+
+@dataclass(frozen=True)
+class SubtitleTrack:
+    id: int
+    name: str
+    language: str | None = None
+
+
+@dataclass(frozen=True)
+class VideoTrack:
+    id: int
+    name: str
+    codec: str | None = None
+    width: int | None = None
+    height: int | None = None
+
+
+@dataclass(frozen=True)
+class MediaInfo:
+    path: str
+    duration_ms: int = 0
+    video_tracks: tuple[VideoTrack, ...] = ()
+    audio_tracks: tuple[AudioTrack, ...] = ()
+    subtitle_tracks: tuple[SubtitleTrack, ...] = ()
+    video_width: int | None = None
+    video_height: int | None = None
+    codec: str | None = None
+
+
+@dataclass
+class PlaybackCallbacks:
+    on_end_reached: Callable[[], None] | None = None
+    on_error: Callable[[str], None] | None = None
+    on_state_changed: Callable[[str], None] | None = None
+
+
+# ---------------------------------------------------------------------------
+# Player state and protocol
+# ---------------------------------------------------------------------------
 
 
 @dataclass(slots=True)

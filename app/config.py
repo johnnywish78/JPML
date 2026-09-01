@@ -19,6 +19,7 @@ class OmdbConfig:
 @dataclass(frozen=True)
 class JPMLConfig:
     omdb: OmdbConfig = field(default_factory=OmdbConfig)
+    player_backend: str = "vlc"
 
 
 def load_config(config_path: Path | None = None) -> JPMLConfig:
@@ -45,10 +46,13 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
     base_url = omdb_raw.get("base_url", "https://www.omdbapi.com/")
     timeout = omdb_raw.get("timeout", 10.0)
 
+    player_backend = str(raw.get("player_backend", "vlc")).strip().lower()
+
     return JPMLConfig(
         omdb=OmdbConfig(
             api_key=api_key,
             base_url=str(base_url),
             timeout=float(timeout),
         ),
+        player_backend=player_backend,
     )

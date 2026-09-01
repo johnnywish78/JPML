@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from dataclasses import dataclass, field
 from typing import Callable
 
 try:
@@ -11,57 +10,19 @@ try:
 except ImportError:
     vlc = None  # type: ignore[assignment]
 
+from app.player import (
+    AudioTrack,
+    MediaInfo,
+    PlaybackCallbacks,
+    SubtitleTrack,
+    VideoTrack,
+)
+
 log = logging.getLogger(__name__)
 
 BACKEND_NAME = "vlc"
 
-# ---------------------------------------------------------------------------
-# Value objects (no raw VLC objects leak outside this module)
-# ---------------------------------------------------------------------------
-
 VALID_PLAYBACK_RATES = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 3.0, 4.0)
-
-
-@dataclass(frozen=True)
-class AudioTrack:
-    id: int
-    name: str
-    language: str | None = None
-
-
-@dataclass(frozen=True)
-class SubtitleTrack:
-    id: int
-    name: str
-    language: str | None = None
-
-
-@dataclass(frozen=True)
-class VideoTrack:
-    id: int
-    name: str
-    codec: str | None = None
-    width: int | None = None
-    height: int | None = None
-
-
-@dataclass(frozen=True)
-class MediaInfo:
-    path: str
-    duration_ms: int = 0
-    video_tracks: tuple[VideoTrack, ...] = ()
-    audio_tracks: tuple[AudioTrack, ...] = ()
-    subtitle_tracks: tuple[SubtitleTrack, ...] = ()
-    video_width: int | None = None
-    video_height: int | None = None
-    codec: str | None = None
-
-
-@dataclass
-class PlaybackCallbacks:
-    on_end_reached: Callable[[], None] | None = None
-    on_error: Callable[[str], None] | None = None
-    on_state_changed: Callable[[str], None] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -6,27 +6,27 @@ import threading
 from typing import Any
 
 from app.library.playback_repository import PlaybackRepository
-from app.player.events import PlaybackEvent, PlaybackEventData, PlaybackEventBus
-from app.player.vlc_backend import (
+from app.player import (
     AudioTrack,
     MediaInfo,
     PlaybackCallbacks,
+    PlayerBackend,
     SubtitleTrack,
     VideoTrack,
-    VLCPlayerBackend,
 )
+from app.player.events import PlaybackEvent, PlaybackEventData, PlaybackEventBus
 from app.services.playback import PlaybackService
 
 log = logging.getLogger(__name__)
 
 
 class PlayerController:
-    """High-level player controller that bridges VLCPlayerBackend and
+    """High-level player controller that bridges a PlayerBackend and
     PlaybackService with an application-level event system.
 
     This is the primary integration point between the playback engine
     and the future UI layer.  It owns the backend lifecycle, wires
-    callbacks, and exposes a clean API without leaking VLC objects.
+    callbacks, and exposes a clean API without leaking backend objects.
 
     Thread safety:
       All public methods are safe to call from any thread.
@@ -36,20 +36,27 @@ class PlayerController:
     def __init__(
         self,
         *,
+        backend_name: str = "vlc",
         vlc_args: list[str] | None = None,
+        mpv_args: list[str] | None = None,
         event_bus: PlaybackEventBus | None = None,
     ) -> None:
         self._event_bus = event_bus or PlaybackEventBus()
         self._lock = threading.Lock()
 
-        self._backend = VLCPlayerBackend(
-            vlc_args=vlc_args,
+        from app.player.factory import create_backend
+
+        self._backend = create_backend(
+            backend_name,
             callbacks=PlaybackCallbacks(
-                on_end_reached=self._on_vlc_end_reached,
-                on_error=self._on_vlc_error,
-                on_state_changed=self._on_vlc_state_changed,
+                on_end_reached=self._on_backend_end_reached,
+                on_error=self._on_backend_error,
+                on_state_changed=self._on_backend_state_changed,
             ),
+            vlc_args=vlc_args,
+            mpv_args=mpv_args,
         )
+        self._backend_name = backend_name
 
         from app.database.connection import connect
         from app.database.schema import initialize as initialize_schema
@@ -71,7 +78,7 @@ class PlayerController:
         return self._service
 
     @property
-    def backend(self) -> VLCPlayerBackend:
+    def backend(self) -> PlayerBackend:
         return self._backend
 
     # -- core playback -------------------------------------------------------
@@ -303,10 +310,10 @@ class PlayerController:
         except Exception:
             pass
 
-    # -- internal VLC callback handlers --------------------------------------
+    # -- internal backend callback handlers -----------------------------------
 
-    def _on_vlc_end_reached(self) -> None:
-        log.debug("VLC end reached — marking completed")
+    def _on_backend_end_reached(self) -> None:
+        log.debug("Backend end reached — marking completed")
         with self._lock:
             mt = self._current_media_type
             mid = self._current_media_id
@@ -322,8 +329,8 @@ class PlayerController:
             )
         )
 
-    def _on_vlc_error(self, message: str) -> None:
-        log.warning("VLC error: %s", message)
+    def _on_backend_error(self, message: str) -> None:
+        log.warning("Backend error: %s", message)
         self._event_bus.emit(
             PlaybackEventData(
                 event=PlaybackEvent.PLAYBACK_ERROR,
@@ -331,7 +338,7 @@ class PlayerController:
             )
         )
 
-    def _on_vlc_state_changed(self, state: str) -> None:
+    def _on_backend_state_changed(self, state: str) -> None:
         self._event_bus.emit(
             PlaybackEventData(
                 event=PlaybackEvent.STATE_CHANGED,

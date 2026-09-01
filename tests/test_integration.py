@@ -10,11 +10,11 @@ from app.bootstrap import (
     create_event_bus,
     create_player_controller,
     create_playback_service,
-    create_vlc_backend,
 )
 from app.library.playback_repository import PlaybackRepository
 from app.player.controller import PlayerController
 from app.player.events import PlaybackEvent, PlaybackEventData, PlaybackEventBus
+from app.player.factory import create_backend
 from app.player.vlc_backend import VLCPlayerBackend
 from app.services.playback import PlaybackService
 
@@ -44,7 +44,7 @@ class TestBootstrap:
         assert isinstance(bus, PlaybackEventBus)
 
     def test_create_vlc_backend(self) -> None:
-        backend = create_vlc_backend()
+        backend = create_backend("vlc")
         assert isinstance(backend, VLCPlayerBackend)
         assert backend.is_open() is False
         backend.release()
