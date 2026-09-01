@@ -41,13 +41,13 @@ def test_fresh_database_creates_all_v3_tables() -> None:
 # ── 2. Schema version is 3 ──────────────────────────────────────────────────
 
 def test_schema_version_is_3() -> None:
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 4
 
     connection = _fresh_connection()
     initialize(connection)
 
     version = _get_schema_version(connection)
-    assert version == 3
+    assert version == 4
 
 
 # ── 3. v2 database migrates to v3 ────────────────────────────────────────────
@@ -826,11 +826,12 @@ def test_initialize_from_empty_runs_full_path() -> None:
     initialize(connection)
 
     version = _get_schema_version(connection)
-    assert version == 3
+    assert version == 4
 
     tables = _table_names(connection)
     assert "external_ids" in tables
     assert "genres" in tables
+    assert "playback_history" in tables
 
 
 # ── 19. initialize() is idempotent ───────────────────────────────────────────
@@ -841,7 +842,7 @@ def test_initialize_is_idempotent() -> None:
     initialize(connection)
 
     version = _get_schema_version(connection)
-    assert version == 3
+    assert version == 4
 
     assert connection.execute("SELECT COUNT(*) FROM movies").fetchone()[0] == 0
 

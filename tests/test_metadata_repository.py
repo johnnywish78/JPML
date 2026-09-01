@@ -246,3 +246,85 @@ def test_empty_genre_name_is_rejected() -> None:
 
     with pytest.raises(ValueError):
         repository.get_or_create_genre("   ")
+
+
+# ── Additional artwork tests ──────────────────────────────────────────────────
+
+def test_artwork_for_tv_show() -> None:
+    connection = _connection()
+    repository = MetadataRepository(connection)
+    tv_id = _tv_id(connection)
+
+    repository.add_artwork(
+        "tv_show",
+        tv_id,
+        "poster",
+        provider="tmdb",
+        provider_path="/tv/123/poster.jpg",
+        local_path="/cache/tv_poster.jpg",
+        width=300,
+        height=450,
+    )
+
+    artwork = repository.list_artwork("tv_show", tv_id)
+    assert len(artwork) == 1
+    assert artwork[0]["provider"] == "tmdb"
+    assert artwork[0]["width"] == 300
+    assert artwork[0]["height"] == 450
+
+
+def test_list_artwork_empty() -> None:
+    connection = _connection()
+    repository = MetadataRepository(connection)
+
+    assert repository.list_artwork("movie", 9999) == []
+
+
+def test_artwork_filtered_by_entity_type() -> None:
+    connection = _connection()
+    repository = MetadataRepository(connection)
+    movie_id = _movie_id(connection)
+    tv_id = _tv_id(connection)
+
+    repository.add_artwork("movie", movie_id, "poster", provider="tmdb")
+    repository.add_artwork("tv_show", tv_id, "poster", provider="tmdb")
+
+    assert len(repository.list_artwork("movie", movie_id)) == 1
+    assert len(repository.list_artwork("tv_show", tv_id)) == 1
+
+
+def test_artwork_null_dimensions() -> None:
+    connection = _connection()
+    repository = MetadataRepository(connection)
+    movie_id = _movie_id(connection)
+
+    repository.add_artwork(
+        "movie",
+        movie_id,
+        "poster",
+        provider="tmdb",
+        provider_path="/abc",
+    )
+
+    artwork = repository.list_artwork("movie", movie_id)
+    assert len(artwork) == 1
+    assert artwork[0]["width"] is None
+    assert artwork[0]["height"] is None
+
+
+def test_artwork_delete_with_entity_cascade() -> None:
+    connection = _connection()
+    repository = MetadataRepository(connection)
+    movie_id = _movie_id(connection)
+
+    repository.add_artwork("movie", movie_id, "poster", provider="tmdb")
+    repository.add_artwork("movie", movie_id, "fanart", provider="tmdb")
+    assert len(repository.list_artwork("movie", movie_id)) == 2
+
+    connection.execute(
+        "DELETE FROM artwork WHERE entity_type = 'movie' AND entity_id = ?",
+        (movie_id,),
+    )
+    connection.commit()
+
+    assert repository.list_artwork("movie", movie_id) == []

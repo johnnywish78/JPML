@@ -32,15 +32,6 @@ class MetadataService:
         self.provider = provider
         self.registry = registry
 
-    def _resolve_provider(
-        self,
-        provider_name: str | None,
-        fallback: MetadataProvider | None = None,
-    ) -> MetadataProvider | None:
-        if provider_name and self.registry and self.registry.has(provider_name):
-            return self.registry.get(provider_name)
-        return fallback or self.provider
-
     def _select_provider(
         self,
         provider: MetadataProvider | None,

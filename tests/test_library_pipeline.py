@@ -921,9 +921,8 @@ class TestPhase5CoordinatorIdempotency:
         result2 = process_library_metadata(conn, integration=integration)
 
         assert result1.files_processed == 2
-        assert result2.files_processed == 2
+        assert result2.files_skipped == 2
         assert result1.entities_created == 2
-        assert result2.entities_reused == 2
 
         movies = conn.execute("SELECT * FROM movies").fetchall()
         assert len(movies) == 2
@@ -962,8 +961,7 @@ class TestPhase5CoordinatorIdempotency:
         )
 
         assert result1.files_processed == 1
-        assert result2.files_processed == 1
-        assert result2.entities_reused == 1
+        assert result2.files_skipped == 1
 
         seasons = conn.execute("SELECT * FROM seasons").fetchall()
         assert len(seasons) == 1
@@ -1265,3 +1263,395 @@ class TestPhase5MixedLibrary:
 
         ep_files = conn.execute("SELECT * FROM episode_files").fetchall()
         assert len(ep_files) == 1
+
+
+class TestPhase6ProviderReturnsNone:
+    def test_provider_returns_none_entity_still_created(
+        self, tmp_path: Path
+    ) -> None:
+        class EmptyProvider(MetadataProvider):
+            name = "empty"
+
+            def fetch_metadata(self, *, entity_type: str, external_id: str):
+                return None
+
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Unknown Movie.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        mf = conn.execute("SELECT * FROM media_files").fetchone()
+
+        from app.library.scanner import ScanResult as SR
+        from app.metadata.identifier import identify
+
+        scan_result = SR(
+            path=Path(mf["path"]),
+            filename=mf["filename"],
+            extension=mf["extension"],
+            size_bytes=mf["size_bytes"],
+        )
+        id_result = identify(scan_result, parent_parts=["Movies"])
+        id_result.provider = "empty"
+        id_result.external_id = "tt99999"
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo, provider=EmptyProvider())
+        integration = LibraryMetadataIntegration(service)
+
+        lib_result = integration.process_identification(id_result)
+
+        assert lib_result.resolution.created is True
+        assert lib_result.metadata_fetched is False
+
+        movies = conn.execute("SELECT * FROM movies").fetchall()
+        assert len(movies) == 1
+
+        eids = repo.list_external_ids("movie", lib_result.resolution.entity_id)
+        assert len(eids) == 1
+
+
+class TestPhase6NormalizeMetadata:
+    def test_empty_genres_becomes_empty_tuple(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "genres": [],
+        })
+        assert result.genres == ()
+
+    def test_none_genres_becomes_empty_tuple(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "genres": None,
+        })
+        assert result.genres == ()
+
+    def test_whitespace_only_genres_filtered(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "genres": ["  ", "Drama", "  "],
+        })
+        assert result.genres == ("Drama",)
+
+    def test_none_year_becomes_none(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "year": None,
+        })
+        assert result.year is None
+
+    def test_string_year_converted_to_int(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "year": "2020",
+        })
+        assert result.year == 2020
+
+    def test_none_overview_becomes_none(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "overview": None,
+        })
+        assert result.overview is None
+
+    def test_none_external_id_becomes_none(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "external_id": None,
+        })
+        assert result.external_id is None
+
+    def test_none_metadata_version_becomes_none(self) -> None:
+        provider = StaticMetadataProvider({})
+        result = provider.normalize_metadata({
+            "title": "Test",
+            "metadata_version": None,
+        })
+        assert result.metadata_version is None
+
+
+class TestPhase6DifferentProvidersCoexist:
+    def test_two_providers_different_entities(self) -> None:
+        conn = _connection()
+
+        repo = MetadataRepository(conn)
+
+        repo.set_external_id(
+            entity_type="movie",
+            entity_id=1,
+            provider="omdb",
+            external_id="tt1375666",
+            is_primary=True,
+        )
+        repo.set_external_id(
+            entity_type="movie",
+            entity_id=1,
+            provider="tmdb",
+            external_id="550",
+            is_primary=False,
+        )
+
+        eids = repo.list_external_ids("movie", 1)
+        assert len(eids) == 2
+        providers = {e["provider"] for e in eids}
+        assert providers == {"omdb", "tmdb"}
+
+    def test_same_external_id_different_entity_types_fails_by_schema(
+        self,
+    ) -> None:
+        conn = _connection()
+
+        repo = MetadataRepository(conn)
+
+        repo.set_external_id(
+            entity_type="movie",
+            entity_id=1,
+            provider="imdb",
+            external_id="tt1234567",
+            is_primary=True,
+        )
+
+        with pytest.raises(Exception, match="UNIQUE"):
+            repo.set_external_id(
+                entity_type="tv",
+                entity_id=1,
+                provider="imdb",
+                external_id="tt1234567",
+                is_primary=True,
+            )
+
+
+class TestPhase6MetadataSourceIdempotency:
+    def test_repeated_save_creates_one_source(self) -> None:
+        conn = _connection()
+        repo = MetadataRepository(conn)
+
+        movie_id = repo.create_movie(title="Test")
+
+        repo.record_metadata_source(
+            entity_type="movie",
+            entity_id=movie_id,
+            provider="omdb",
+            metadata_version="v1",
+        )
+        repo.record_metadata_source(
+            entity_type="movie",
+            entity_id=movie_id,
+            provider="omdb",
+            metadata_version="v2",
+        )
+
+        sources = conn.execute(
+            "SELECT * FROM metadata_sources WHERE entity_type = 'movie' AND entity_id = ?",
+            (movie_id,),
+        ).fetchall()
+        assert len(sources) == 1
+        assert sources[0]["metadata_version"] == "v2"
+
+
+class TestPhase6NormalizeEntityType:
+    def test_movie_type_normalizes_to_movie(self) -> None:
+        from app.metadata.service import MetadataService
+        from app.metadata.identifier import IdentificationResult
+        from app.domain.media import MediaType
+
+        result = IdentificationResult(
+            media_type=MediaType.MOVIE,
+            title="Test",
+        )
+        assert MetadataService._normalize_entity_type(result) == "movie"
+
+    def test_episode_type_normalizes_to_tv(self) -> None:
+        from app.metadata.service import MetadataService
+        from app.metadata.identifier import IdentificationResult
+        from app.domain.media import MediaType
+
+        result = IdentificationResult(
+            media_type=MediaType.EPISODE,
+            title="Test",
+        )
+        assert MetadataService._normalize_entity_type(result) == "tv"
+
+    def test_tv_show_type_normalizes_to_tv(self) -> None:
+        from app.metadata.service import MetadataService
+        from app.metadata.identifier import IdentificationResult
+        from app.domain.media import MediaType
+
+        result = IdentificationResult(
+            media_type=MediaType.TV_SHOW,
+            title="Test",
+        )
+        assert MetadataService._normalize_entity_type(result) == "tv"
+
+    def test_music_type_normalizes_to_music(self) -> None:
+        from app.metadata.service import MetadataService
+        from app.metadata.identifier import IdentificationResult
+        from app.domain.media import MediaType
+
+        result = IdentificationResult(
+            media_type=MediaType.MUSIC,
+            title="Test",
+        )
+        assert MetadataService._normalize_entity_type(result) == "music"
+
+
+class TestPhase6LinkMediaFileEdgeCases:
+    def test_unknown_entity_type_is_noop(self) -> None:
+        from app.library.coordinator import _link_media_file
+
+        conn = _connection()
+        conn.execute(
+            "INSERT INTO media_files(path, filename, extension) VALUES (?, ?, ?)",
+            ("/tmp/test.mkv", "test.mkv", ".mkv"),
+        )
+        mf_id = conn.execute("SELECT id FROM media_files").fetchone()["id"]
+
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf_id,
+            entity_type="unknown",
+            entity_id=999,
+        )
+
+        assert conn.execute("SELECT * FROM movie_files").fetchall() == []
+        assert conn.execute("SELECT * FROM episode_files").fetchall() == []
+
+    def test_movie_link_idempotent(self) -> None:
+        from app.library.coordinator import _link_media_file
+
+        conn = _connection()
+        conn.execute("INSERT INTO movies(title) VALUES (?)", ("Test",))
+        movie_id = conn.execute("SELECT id FROM movies").fetchone()["id"]
+        conn.execute(
+            "INSERT INTO media_files(path, filename, extension) VALUES (?, ?, ?)",
+            ("/tmp/test.mkv", "test.mkv", ".mkv"),
+        )
+        mf_id = conn.execute("SELECT id FROM media_files").fetchone()["id"]
+
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf_id,
+            entity_type="movie",
+            entity_id=movie_id,
+        )
+        _link_media_file(
+            connection=conn,
+            media_file_id=mf_id,
+            entity_type="movie",
+            entity_id=movie_id,
+        )
+
+        links = conn.execute("SELECT * FROM movie_files").fetchall()
+        assert len(links) == 1
+
+
+class TestPhase6ServiceCreateEntityEdgeCases:
+    def test_create_entity_unsupported_type_raises(self) -> None:
+        from app.metadata.service import MetadataService
+        from app.metadata.identifier import IdentificationResult
+        from app.metadata.repository import MetadataRepository
+
+        conn = _connection()
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+
+        result = IdentificationResult(
+            media_type="unsupported",
+            title="Test",
+        )
+
+        with pytest.raises(ValueError, match="Unsupported"):
+            service._create_entity(result)
+
+
+class TestPhase6ExternalIdSafety:
+    def test_find_by_external_id_returns_none_when_missing(self) -> None:
+        conn = _connection()
+        repo = MetadataRepository(conn)
+
+        result = repo.find_by_external_id(
+            entity_type="movie",
+            provider="omdb",
+            external_id="tt9999999",
+        )
+        assert result is None
+
+    def test_set_external_id_upserts_safely(self) -> None:
+        conn = _connection()
+        repo = MetadataRepository(conn)
+
+        repo.set_external_id(
+            entity_type="movie",
+            entity_id=1,
+            provider="omdb",
+            external_id="tt111",
+            is_primary=True,
+        )
+        repo.set_external_id(
+            entity_type="movie",
+            entity_id=1,
+            provider="omdb",
+            external_id="tt222",
+            is_primary=False,
+        )
+
+        eid = repo.get_external_id("movie", 1, "omdb")
+        assert eid == "tt222"
+
+        eids = repo.list_external_ids("movie", 1)
+        assert len(eids) == 1
+
+
+class TestPhase6FilesSkippedCounting:
+    def test_second_run_increments_files_skipped(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Inception (2010).mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        result1 = process_library_metadata(conn, integration=integration)
+        result2 = process_library_metadata(conn, integration=integration)
+
+        assert result1.files_processed == 1
+        assert result1.files_skipped == 0
+        assert result2.files_processed == 0
+        assert result2.files_skipped == 1
+
+    def test_mixed_new_and_existing_files(self, tmp_path: Path) -> None:
+        lib_dir = tmp_path / "Movies"
+        lib_dir.mkdir()
+        (lib_dir / "Existing Movie.mkv").write_bytes(b"")
+
+        conn = _connection()
+        sync_location(conn, lib_dir)
+        process_library_metadata(conn, integration=LibraryMetadataIntegration(
+            MetadataService(MetadataRepository(conn))
+        ))
+
+        (lib_dir / "New Movie.mkv").write_bytes(b"")
+        sync_location(conn, lib_dir)
+
+        repo = MetadataRepository(conn)
+        service = MetadataService(repo)
+        integration = LibraryMetadataIntegration(service)
+
+        result = process_library_metadata(conn, integration=integration)
+
+        assert result.files_processed == 1
+        assert result.files_skipped == 1
+        assert result.entities_created == 1

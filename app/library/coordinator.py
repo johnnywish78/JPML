@@ -24,6 +24,7 @@ class SyncResult:
 @dataclass(slots=True)
 class MetadataProcessResult:
     files_processed: int = 0
+    files_skipped: int = 0
     entities_created: int = 0
     entities_reused: int = 0
     metadata_fetched: int = 0
@@ -119,9 +120,7 @@ def process_library_metadata(
             continue
 
         if _is_media_file_linked(connection, mf.id):
-            result.files_processed += 1
-            result.entities_reused += 1
-            result.metadata_skipped += 1
+            result.files_skipped += 1
             continue
 
         try:

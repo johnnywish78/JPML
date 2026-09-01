@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 SCHEMA = """
@@ -359,3 +359,35 @@ def initialize(connection: sqlite3.Connection) -> None:
 
     if version < 3:
         _migrate_v2_to_v3(connection)
+        version = 3
+
+    if version < 4:
+        _migrate_v3_to_v4(connection)
+
+
+def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS playback_history (
+            id INTEGER PRIMARY KEY,
+            media_type TEXT NOT NULL,
+            media_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL DEFAULT '',
+            started_at TEXT NOT NULL,
+            stopped_at TEXT,
+            last_position REAL DEFAULT 0.0,
+            duration REAL DEFAULT 0.0,
+            completed INTEGER DEFAULT 0,
+            backend_used TEXT DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_playback_history_media
+            ON playback_history(media_type, media_id);
+        CREATE INDEX IF NOT EXISTS idx_playback_history_started
+            ON playback_history(started_at);
+        """
+    )
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_version(version) VALUES (4)"
+    )
+    connection.commit()
