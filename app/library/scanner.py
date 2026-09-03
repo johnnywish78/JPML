@@ -77,6 +77,7 @@ def scan_locations(
     locations: list[Path],
 ) -> tuple[list[ScanResult], ScanStats]:
     stats = ScanStats()
+    all_results: list[ScanResult] = []
 
     for location in locations:
         resolved = location.resolve()
@@ -93,19 +94,11 @@ def scan_locations(
             continue
 
         stats.media_files_found += len(results)
+        stats.directories_scanned += 1
 
         for result in results:
             stats.files_examined += 1
 
-        stats.directories_scanned += 1
-
-    all_results: list[ScanResult] = []
-    for location in locations:
-        resolved = location.resolve()
-        if resolved.is_dir():
-            try:
-                all_results.extend(scan_directory(resolved))
-            except PermissionError:
-                pass
+        all_results.extend(results)
 
     return all_results, stats

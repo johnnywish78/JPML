@@ -1,8 +1,11 @@
 from .media import (
+    Album,
+    Artist,
     Episode,
     MediaFile,
     MediaType,
     Movie,
+    MusicTrack,
     Person,
     PersonRole,
     Season,
@@ -10,10 +13,13 @@ from .media import (
 )
 
 __all__ = [
+    "Album",
+    "Artist",
     "Episode",
     "MediaFile",
     "MediaType",
     "Movie",
+    "MusicTrack",
     "Person",
     "PersonRole",
     "Season",

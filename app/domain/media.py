@@ -86,3 +86,34 @@ class TVShow:
     id: int | None = None
     seasons: list[Season] = field(default_factory=list)
     people: list[Person] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class Artist:
+    name: str
+    biography: str | None = None
+    id: int | None = None
+    albums: list[Album] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class Album:
+    title: str
+    artist_id: int | None = None
+    year: int | None = None
+    id: int | None = None
+    artist: Artist | None = None
+    tracks: list[MusicTrack] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class MusicTrack:
+    title: str
+    album_id: int | None = None
+    track_number: int | None = None
+    duration_seconds: float | None = None
+    year: int | None = None
+    id: int | None = None
+    album: Album | None = None
+    artist: Artist | None = None
+    files: list[MediaFile] = field(default_factory=list)

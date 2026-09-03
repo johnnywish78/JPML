@@ -77,7 +77,7 @@ def sync_location(
 
 
 def _is_media_file_linked(connection: sqlite3.Connection, media_file_id: int) -> bool:
-    """Check if a media file is already linked to a movie or episode."""
+    """Check if a media file is already linked to a movie, episode or track."""
     row = connection.execute(
         "SELECT 1 FROM movie_files WHERE media_file_id = ? LIMIT 1",
         (media_file_id,),
@@ -86,6 +86,12 @@ def _is_media_file_linked(connection: sqlite3.Connection, media_file_id: int) ->
         return True
     row = connection.execute(
         "SELECT 1 FROM episode_files WHERE media_file_id = ? LIMIT 1",
+        (media_file_id,),
+    ).fetchone()
+    if row is not None:
+        return True
+    row = connection.execute(
+        "SELECT 1 FROM track_files WHERE media_file_id = ? LIMIT 1",
         (media_file_id,),
     ).fetchone()
     return row is not None
@@ -109,6 +115,7 @@ def process_library_metadata(
     """
     from app.metadata.identifier import identify
     from app.library.scanner import ScanResult as SR
+    from app.library.scanner import AUDIO_EXTENSIONS
 
     media_repo = MediaRepository(connection)
     result = MetadataProcessResult()
@@ -131,7 +138,17 @@ def process_library_metadata(
                 size_bytes=mf.size_bytes,
             )
 
-            id_result = identify(scan_result, parent_parts=parent_parts)
+            parts_for_identify = parent_parts
+            if parts_for_identify is None and (
+                (mf.extension or "").lower() in AUDIO_EXTENSIONS
+            ):
+                # Music: use the two nearest directories as
+                # artist/album context (e.g. /Music/Artist/Album/file.mp3).
+                file_path = Path(mf.path)
+                parents = [p.name for p in list(file_path.parents)[:2][::-1]]
+                parts_for_identify = parents
+
+            id_result = identify(scan_result, parent_parts=parts_for_identify)
 
             lib_result = integration.process_identification(id_result)
 
@@ -194,6 +211,15 @@ def _link_media_file(
             season=season,
             episode=episode,
         )
+    elif entity_type == "track":
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO track_files(track_id, media_file_id)
+            VALUES (?, ?)
+            """,
+            (entity_id, media_file_id),
+        )
+        connection.commit()
 
 
 def _link_tv_media_file(

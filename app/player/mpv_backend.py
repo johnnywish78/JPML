@@ -72,6 +72,7 @@ class MPVPlayerBackend:
         self._callbacks = callbacks or PlaybackCallbacks()
         self._lock = threading.Lock()
         self._media_loaded = False
+        self._pending_seek: float | None = None
 
         self._attach_events()
 
@@ -86,6 +87,7 @@ class MPVPlayerBackend:
             raise RuntimeError("Backend has been released")
 
         with self._lock:
+            self._pending_seek = None
             self._player.command("loadfile", path, "replace")
             self._path = path
             self._media_loaded = True
@@ -98,6 +100,7 @@ class MPVPlayerBackend:
                 self._player.command("stop")
             except Exception:
                 pass
+            self._pending_seek = None
             self._path = ""
             self._media_loaded = False
 
@@ -121,6 +124,7 @@ class MPVPlayerBackend:
                 self._player.command("stop")
             except Exception:
                 pass
+            self._pending_seek = None
             self._path = ""
             self._media_loaded = False
 
@@ -128,8 +132,15 @@ class MPVPlayerBackend:
         self._require_media()
         seconds = max(0.0, float(seconds))
         duration_s = self.get_duration()
-        if duration_s > 0:
-            seconds = min(seconds, duration_s)
+
+        if duration_s <= 0:
+            # libmpv loads media asynchronously.  Keep the requested
+            # position until duration metadata becomes available.
+            with self._lock:
+                self._pending_seek = seconds
+            return
+
+        seconds = min(seconds, duration_s)
         try:
             self._player.command("seek", seconds, "absolute")
         except Exception:
@@ -477,6 +488,7 @@ class MPVPlayerBackend:
             self._player.observe_property("eof-reached", self._on_eof)
             self._player.observe_property("pause", self._on_pause_changed)
             self._player.observe_property("core-idle", self._on_core_idle)
+            self._player.observe_property("duration", self._on_duration_changed)
         except Exception:
             log.debug("Failed to attach mpv observers", exc_info=True)
 
@@ -497,6 +509,32 @@ class MPVPlayerBackend:
                 cb("paused" if value else "playing")
             except Exception:
                 pass
+
+    def _on_duration_changed(self, name: str, value: Any) -> None:  # noqa: ARG002
+        if value is None:
+            return
+
+        try:
+            duration = float(value)
+        except (TypeError, ValueError):
+            return
+
+        if duration <= 0:
+            return
+
+        with self._lock:
+            pending = self._pending_seek
+            self._pending_seek = None
+
+        if pending is None or not self._is_media_loaded():
+            return
+
+        pending = min(max(0.0, pending), duration)
+
+        try:
+            self._player.command("seek", pending, "absolute")
+        except Exception:
+            log.debug("Failed to apply pending MPV seek", exc_info=True)
 
     def _on_core_idle(self, name: str, value: Any) -> None:  # noqa: ARG002
         cb = self._callbacks.on_state_changed

@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from app.domain.media import MediaType
 
 from .identifier import IdentificationResult
 from .service import MetadataResolution, MetadataService
+
+if TYPE_CHECKING:
+    from app.services.music import MusicService
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +35,21 @@ class LibraryMetadataResult:
 class LibraryMetadataIntegration:
     """Bridge between library identification and metadata persistence."""
 
-    def __init__(self, metadata_service: MetadataService) -> None:
+    def __init__(
+        self,
+        metadata_service: MetadataService,
+        music_service: "MusicService | None" = None,
+    ) -> None:
         self.metadata_service = metadata_service
+        self.music_service = music_service
 
     def process_identification(
         self,
         result: IdentificationResult,
     ) -> LibraryMetadataResult:
+        if result.media_type == MediaType.MUSIC:
+            return self._process_music(result)
+
         resolution = self.metadata_service.resolve_identification(result)
 
         fetched = False
@@ -61,4 +75,19 @@ class LibraryMetadataIntegration:
         return LibraryMetadataResult(
             resolution=resolution,
             metadata_fetched=fetched,
+        )
+
+    def _process_music(self, result: IdentificationResult) -> LibraryMetadataResult:
+        if self.music_service is None:
+            raise RuntimeError(
+                "MusicService is required to process music identifications"
+            )
+        resolution = self.music_service.resolve_identification(result)
+        return LibraryMetadataResult(
+            resolution=MetadataResolution(
+                entity_type="track",
+                entity_id=resolution.track_id,
+                created=resolution.created,
+            ),
+            metadata_fetched=False,
         )

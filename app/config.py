@@ -17,8 +17,14 @@ class OmdbConfig:
 
 
 @dataclass(frozen=True)
+class DiscoveryConfig:
+    trending_provider: str = "local"
+
+
+@dataclass(frozen=True)
 class JPMLConfig:
     omdb: OmdbConfig = field(default_factory=OmdbConfig)
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     player_backend: str = "vlc"
 
 
@@ -46,6 +52,18 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
     base_url = omdb_raw.get("base_url", "https://www.omdbapi.com/")
     timeout = omdb_raw.get("timeout", 10.0)
 
+    discovery_raw: dict = (
+        raw.get("discovery", {}) if isinstance(raw.get("discovery"), dict) else {}
+    )
+    trending_provider = str(
+        discovery_raw.get("trending_provider", "local")
+    ).strip().lower()
+    if trending_provider not in ("local",):
+        raise ValueError(
+            f"Unknown discovery trending_provider: {trending_provider!r}. "
+            "Supported: 'local'"
+        )
+
     player_backend = str(raw.get("player_backend", "vlc")).strip().lower()
 
     return JPMLConfig(
@@ -54,5 +72,6 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
             base_url=str(base_url),
             timeout=float(timeout),
         ),
+        discovery=DiscoveryConfig(trending_provider=trending_provider),
         player_backend=player_backend,
     )

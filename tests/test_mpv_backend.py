@@ -647,6 +647,7 @@ class TestCallbacks:
         called = []
         cb = PlaybackCallbacks(on_state_changed=lambda s: called.append(s))
         backend = _make_backend(callbacks=cb)
+        called.clear()
         backend._on_pause_changed("pause", True)
         backend._on_pause_changed("pause", False)
         backend._on_core_idle("core-idle", True)

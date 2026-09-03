@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
+
+from app.library.music_repository import MusicRepository
 
 
 @dataclass(slots=True)
@@ -85,6 +86,83 @@ class SearchRepository:
                 overview=row["overview"],
             )
             for row in rows
+        ]
+
+    def search_people(
+        self, query: str, *, limit: int = 50
+    ) -> list[SearchResult]:
+        rows = self._conn.execute(
+            """
+            SELECT
+                p.id,
+                p.name,
+                NULL AS year,
+                p.biography AS overview
+            FROM people AS p
+            WHERE p.name LIKE ?
+            ORDER BY
+                CASE
+                    WHEN p.name = ? THEN 0
+                    WHEN p.name LIKE ? THEN 1
+                    ELSE 2
+                END,
+                p.name
+            LIMIT ?
+            """,
+            (f"%{query}%", query, f"{query}%", limit),
+        ).fetchall()
+        return [
+            SearchResult(
+                entity_type="person",
+                entity_id=row["id"],
+                title=row["name"],
+                overview=row["overview"],
+            )
+            for row in rows
+        ]
+
+    def search_artists(
+        self, query: str, *, limit: int = 50
+    ) -> list[SearchResult]:
+        artists = MusicRepository(self._conn).search_artists(query, limit=limit)
+        return [
+            SearchResult(
+                entity_type="artist",
+                entity_id=a.id,
+                title=a.name,
+                overview=a.biography,
+            )
+            for a in artists
+        ]
+
+    def search_albums(
+        self, query: str, *, limit: int = 50
+    ) -> list[SearchResult]:
+        albums = MusicRepository(self._conn).search_albums(query, limit=limit)
+        return [
+            SearchResult(
+                entity_type="album",
+                entity_id=a.id,
+                title=a.title,
+                year=a.year,
+                overview=a.artist.name if a.artist is not None else None,
+            )
+            for a in albums
+        ]
+
+    def search_tracks(
+        self, query: str, *, limit: int = 50
+    ) -> list[SearchResult]:
+        tracks = MusicRepository(self._conn).search_tracks(query, limit=limit)
+        return [
+            SearchResult(
+                entity_type="track",
+                entity_id=t.id,
+                title=t.title,
+                year=t.year,
+                overview=t.artist.name if t.artist is not None else None,
+            )
+            for t in tracks
         ]
 
     def search_all(

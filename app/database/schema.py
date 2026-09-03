@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 
 SCHEMA = """
@@ -226,6 +226,90 @@ CREATE TABLE IF NOT EXISTS tv_genres (
         REFERENCES genres(id)
         ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS collection_items (
+    id INTEGER PRIMARY KEY,
+    collection_id INTEGER NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(collection_id, entity_type, entity_id),
+    FOREIGN KEY(collection_id)
+        REFERENCES collections(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS artists (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    biography TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS albums (
+    id INTEGER PRIMARY KEY,
+    artist_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    year INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(artist_id, title),
+    FOREIGN KEY(artist_id)
+        REFERENCES artists(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS music_tracks (
+    id INTEGER PRIMARY KEY,
+    album_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    track_number INTEGER,
+    duration_seconds REAL,
+    year INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(album_id, title),
+    FOREIGN KEY(album_id)
+        REFERENCES albums(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS track_files (
+    track_id INTEGER NOT NULL,
+    media_file_id INTEGER NOT NULL,
+    PRIMARY KEY(track_id, media_file_id),
+    FOREIGN KEY(track_id)
+        REFERENCES music_tracks(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(media_file_id)
+        REFERENCES media_files(id)
+        ON DELETE CASCADE
+);
 """
 
 
@@ -363,6 +447,116 @@ def initialize(connection: sqlite3.Connection) -> None:
 
     if version < 4:
         _migrate_v3_to_v4(connection)
+        version = 4
+
+    if version < 5:
+        _migrate_v4_to_v5(connection)
+        version = 5
+
+    if version < 6:
+        _migrate_v5_to_v6(connection)
+
+
+def _migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_version(version) VALUES (5)"
+    )
+    connection.commit()
+
+
+_V5_TO_V6_TABLES = """
+CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+    id INTEGER PRIMARY KEY,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(entity_type, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS collection_items (
+    id INTEGER PRIMARY KEY,
+    collection_id INTEGER NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    added_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(collection_id, entity_type, entity_id),
+    FOREIGN KEY(collection_id)
+        REFERENCES collections(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS artists (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    biography TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS albums (
+    id INTEGER PRIMARY KEY,
+    artist_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    year INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(artist_id, title),
+    FOREIGN KEY(artist_id)
+        REFERENCES artists(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS music_tracks (
+    id INTEGER PRIMARY KEY,
+    album_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    track_number INTEGER,
+    duration_seconds REAL,
+    year INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(album_id, title),
+    FOREIGN KEY(album_id)
+        REFERENCES albums(id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS track_files (
+    track_id INTEGER NOT NULL,
+    media_file_id INTEGER NOT NULL,
+    PRIMARY KEY(track_id, media_file_id),
+    FOREIGN KEY(track_id)
+        REFERENCES music_tracks(id)
+        ON DELETE CASCADE,
+    FOREIGN KEY(media_file_id)
+        REFERENCES media_files(id)
+        ON DELETE CASCADE
+);
+"""
+
+
+def _migrate_v5_to_v6(connection: sqlite3.Connection) -> None:
+    connection.executescript(_V5_TO_V6_TABLES)
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_version(version) VALUES (6)"
+    )
+    connection.commit()
 
 
 def _migrate_v3_to_v4(connection: sqlite3.Connection) -> None:

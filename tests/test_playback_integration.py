@@ -62,7 +62,7 @@ def _make_connection() -> sqlite3.Connection:
             year INTEGER
         );
 
-        INSERT INTO schema_version(version) VALUES (5);
+        INSERT INTO schema_version(version) VALUES (6);
         """
     )
     return connection

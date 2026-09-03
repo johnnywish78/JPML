@@ -37,22 +37,17 @@ def _make_connection() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_playback_history_started
             ON playback_history(started_at);
 
-        CREATE TABLE IF NOT EXISTS library_files (
+        CREATE TABLE IF NOT EXISTS media_files (
             id INTEGER PRIMARY KEY,
-            file_path TEXT NOT NULL UNIQUE,
-            file_name TEXT NOT NULL DEFAULT '',
-            file_size INTEGER DEFAULT 0,
-            file_modified_time REAL DEFAULT 0.0,
-            media_type TEXT NOT NULL DEFAULT '',
-            detected_type TEXT DEFAULT '',
-            library_location TEXT DEFAULT '',
-            scan_date TEXT NOT NULL,
-            last_modified_scan TEXT NOT NULL,
-            detected_title TEXT DEFAULT '',
-            detected_year INTEGER,
-            detected_season INTEGER,
-            detected_episode INTEGER,
-            file_status TEXT NOT NULL DEFAULT 'present'
+            path TEXT NOT NULL UNIQUE,
+            filename TEXT NOT NULL,
+            extension TEXT,
+            size_bytes INTEGER,
+            duration_seconds REAL,
+            mime_type TEXT,
+            is_missing INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS movies (
@@ -70,22 +65,22 @@ def _make_connection() -> sqlite3.Connection:
         );
 
         CREATE TABLE IF NOT EXISTS movie_files (
-            id INTEGER PRIMARY KEY,
             movie_id INTEGER NOT NULL,
-            library_file_id INTEGER NOT NULL,
-            is_primary INTEGER DEFAULT 0,
-            date_added TEXT NOT NULL
+            media_file_id INTEGER NOT NULL,
+            PRIMARY KEY(movie_id, media_file_id),
+            FOREIGN KEY(movie_id) REFERENCES movies(id) ON DELETE CASCADE,
+            FOREIGN KEY(media_file_id) REFERENCES media_files(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS episode_files (
-            id INTEGER PRIMARY KEY,
             episode_id INTEGER NOT NULL,
-            library_file_id INTEGER NOT NULL,
-            is_primary INTEGER DEFAULT 0,
-            date_added TEXT NOT NULL
+            media_file_id INTEGER NOT NULL,
+            PRIMARY KEY(episode_id, media_file_id),
+            FOREIGN KEY(episode_id) REFERENCES episodes(id) ON DELETE CASCADE,
+            FOREIGN KEY(media_file_id) REFERENCES media_files(id) ON DELETE CASCADE
         );
 
-        INSERT INTO schema_version(version) VALUES (5);
+        INSERT INTO schema_version(version) VALUES (6);
         """
     )
     return connection
@@ -107,22 +102,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _insert_library_file(
+def _insert_media_file(
     db: sqlite3.Connection,
     file_path: str,
     *,
-    media_type: str = "movie",
-    file_status: str = "present",
+    is_missing: int = 0,
 ) -> int:
-    now = _now()
+    filename = file_path.rsplit("/", 1)[-1]
     cursor = db.execute(
         """
-        INSERT INTO library_files
-            (file_path, file_name, media_type, scan_date,
-             last_modified_scan, file_status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO media_files (path, filename, is_missing)
+        VALUES (?, ?, ?)
         """,
-        (file_path, file_path.rsplit("/", 1)[-1], media_type, now, now, file_status),
+        (file_path, filename, is_missing),
     )
     db.commit()
     return int(cursor.lastrowid)
@@ -146,27 +138,23 @@ def _insert_episode(
 
 
 def _link_movie_file(
-    db: sqlite3.Connection, movie_id: int, library_file_id: int
-) -> int:
-    now = _now()
-    cursor = db.execute(
-        "INSERT INTO movie_files(movie_id, library_file_id, date_added) VALUES (?, ?, ?)",
-        (movie_id, library_file_id, now),
+    db: sqlite3.Connection, movie_id: int, media_file_id: int
+) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO movie_files(movie_id, media_file_id) VALUES (?, ?)",
+        (movie_id, media_file_id),
     )
     db.commit()
-    return int(cursor.lastrowid)
 
 
 def _link_episode_file(
-    db: sqlite3.Connection, episode_id: int, library_file_id: int
-) -> int:
-    now = _now()
-    cursor = db.execute(
-        "INSERT INTO episode_files(episode_id, library_file_id, date_added) VALUES (?, ?, ?)",
-        (episode_id, library_file_id, now),
+    db: sqlite3.Connection, episode_id: int, media_file_id: int
+) -> None:
+    db.execute(
+        "INSERT OR IGNORE INTO episode_files(episode_id, media_file_id) VALUES (?, ?)",
+        (episode_id, media_file_id),
     )
     db.commit()
-    return int(cursor.lastrowid)
 
 
 # ── Playback history schema basics ────────────────────────────────────────────
@@ -344,9 +332,9 @@ class TestGetResumeCandidates:
     def test_returns_incomplete_with_position(
         self, repo: PlaybackRepository, db: sqlite3.Connection
     ) -> None:
-        lf_id = _insert_library_file(db, "/movies/inception.mkv")
+        mf_id = _insert_media_file(db, "/movies/inception.mkv")
         movie_id = _insert_movie(db, "Inception")
-        _link_movie_file(db, movie_id, lf_id)
+        _link_movie_file(db, movie_id, mf_id)
 
         repo.start_playback("movie", movie_id, "/movies/inception.mkv")
         repo.update_position("movie", movie_id, 100.0)
@@ -373,9 +361,9 @@ class TestGetResumeCandidates:
     def test_excludes_zero_position(
         self, repo: PlaybackRepository, db: sqlite3.Connection
     ) -> None:
-        lf_id = _insert_library_file(db, "/movies/c.mkv")
+        mf_id = _insert_media_file(db, "/movies/c.mkv")
         movie_id = _insert_movie(db, "Movie C")
-        _link_movie_file(db, movie_id, lf_id)
+        _link_movie_file(db, movie_id, mf_id)
 
         repo.start_playback("movie", movie_id, "/movies/c.mkv")
         candidates = repo.get_resume_candidates()
@@ -384,11 +372,11 @@ class TestGetResumeCandidates:
     def test_excludes_missing_files(
         self, repo: PlaybackRepository, db: sqlite3.Connection
     ) -> None:
-        lf_id = _insert_library_file(
-            db, "/movies/missing.mkv", file_status="missing"
+        mf_id = _insert_media_file(
+            db, "/movies/missing.mkv", is_missing=1
         )
         movie_id = _insert_movie(db, "Missing Movie")
-        _link_movie_file(db, movie_id, lf_id)
+        _link_movie_file(db, movie_id, mf_id)
 
         repo.start_playback("movie", movie_id, "/movies/missing.mkv")
         repo.update_position("movie", movie_id, 50.0)
@@ -399,9 +387,9 @@ class TestGetResumeCandidates:
     def test_includes_present_files(
         self, repo: PlaybackRepository, db: sqlite3.Connection
     ) -> None:
-        lf_id = _insert_library_file(db, "/movies/present.mkv", file_status="present")
+        mf_id = _insert_media_file(db, "/movies/present.mkv")
         movie_id = _insert_movie(db, "Present Movie")
-        _link_movie_file(db, movie_id, lf_id)
+        _link_movie_file(db, movie_id, mf_id)
 
         repo.start_playback("movie", movie_id, "/movies/present.mkv")
         repo.update_position("movie", movie_id, 50.0)

@@ -239,14 +239,14 @@ class PlaybackRepository:
               AND (
                     NOT EXISTS (
                         SELECT 1
-                        FROM library_files AS lf
-                        WHERE lf.file_path = ph.file_path
+                        FROM media_files AS mf
+                        WHERE mf.path = ph.file_path
                     )
                     OR EXISTS (
                         SELECT 1
-                        FROM library_files AS lf
-                        WHERE lf.file_path = ph.file_path
-                          AND lf.file_status = 'present'
+                        FROM media_files AS mf
+                        WHERE mf.path = ph.file_path
+                          AND mf.is_missing = 0
                     )
                   )
             ORDER BY
