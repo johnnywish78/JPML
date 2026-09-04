@@ -22,8 +22,18 @@ class DiscoveryConfig:
 
 
 @dataclass(frozen=True)
+class TmdbConfig:
+    api_key: str = ""
+    base_url: str = "https://api.themoviedb.org/3/"
+    image_base: str = "https://image.tmdb.org/t/p/w500"
+    backdrop_image_base: str = "https://image.tmdb.org/t/p/w1280"
+    timeout: float = 10.0
+
+
+@dataclass(frozen=True)
 class JPMLConfig:
     omdb: OmdbConfig = field(default_factory=OmdbConfig)
+    tmdb: TmdbConfig = field(default_factory=TmdbConfig)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     player_backend: str = "vlc"
 
@@ -52,6 +62,20 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
     base_url = omdb_raw.get("base_url", "https://www.omdbapi.com/")
     timeout = omdb_raw.get("timeout", 10.0)
 
+    tmdb_raw: dict = raw.get("tmdb", {}) if isinstance(raw.get("tmdb"), dict) else {}
+
+    tmdb_api_key = (
+        tmdb_raw.get("api_key")
+        or os.environ.get("TMDB_API_KEY", "")
+    )
+    if isinstance(tmdb_api_key, str):
+        tmdb_api_key = tmdb_api_key.strip()
+
+    tmdb_base_url = str(tmdb_raw.get("base_url", "https://api.themoviedb.org/3/")).strip()
+    tmdb_image_base = str(tmdb_raw.get("image_base", "https://image.tmdb.org/t/p/w500")).strip()
+    tmdb_backdrop_base = str(tmdb_raw.get("backdrop_image_base", "https://image.tmdb.org/t/p/w1280")).strip()
+    tmdb_timeout = float(tmdb_raw.get("timeout", 10.0))
+
     discovery_raw: dict = (
         raw.get("discovery", {}) if isinstance(raw.get("discovery"), dict) else {}
     )
@@ -71,6 +95,13 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
             api_key=api_key,
             base_url=str(base_url),
             timeout=float(timeout),
+        ),
+        tmdb=TmdbConfig(
+            api_key=tmdb_api_key,
+            base_url=tmdb_base_url,
+            image_base=tmdb_image_base,
+            backdrop_image_base=tmdb_backdrop_base,
+            timeout=tmdb_timeout,
         ),
         discovery=DiscoveryConfig(trending_provider=trending_provider),
         player_backend=player_backend,

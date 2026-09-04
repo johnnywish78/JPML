@@ -30,7 +30,7 @@ _YEAR_RANGE = range(1900, 2031)
 
 _TECHNICAL_TOKENS: frozenset[str] = frozenset({
     "480p", "576p", "720p", "1080p", "1440p", "2160p", "4k", "8k", "uhd",
-    "web", "web-dl", "webrip", "webdl", "bluray", "bdrip", "brrip",
+    "web", "web-dl", "webrip", "webdl", "bluray", "bdrip", "brrip", "dl",
     "hdtv", "dvdrip", "remux", "proper", "repack", "limited",
     "extended", "uncut", "directors", "director", "cut",
     "x264", "x265", "h264", "h265", "hevc", "av1", "mpeg4",
@@ -223,6 +223,15 @@ def _identify_video(filename: str, parent_parts: list[str]) -> IdentificationRes
         title_text = normalize_title(after_tv)
         title_text = re.sub(r"\s*\(\d{4}\)\s*", "", title_text).strip()
         title_text = re.sub(r"\b(?:19|20)\d{2}\b", "", title_text).strip(".- _")
+        # Remove remaining technical/release tokens from the title
+        for token in _TECHNICAL_TOKENS:
+            title_text = re.sub(
+                r"(?i)(?:[\.\s\-_]+)" + re.escape(token) + r"(?:[\.\s\-_]+)?",
+                " ",
+                title_text,
+            )
+        # Strip trailing release-group-like tokens (e.g. "-Group")
+        title_text = _strip_release_group(title_text)
         title_text = normalize_title(title_text)
         ep_title = _detect_episode_title(stem)
 
@@ -249,6 +258,15 @@ def _identify_video(filename: str, parent_parts: list[str]) -> IdentificationRes
     year, cleaned_for_title = _extract_year_from_stem(cleaned_stem)
     title_text = normalize_title(cleaned_for_title)
     title_text = re.sub(r"\s*\(\d{4}\)\s*", "", title_text).strip()
+    title_text = re.sub(r"\b(?:19|20)\d{2}\b", "", title_text).strip(".- _")
+    # Remove remaining technical/release tokens from the title
+    for token in _TECHNICAL_TOKENS:
+        title_text = re.sub(
+            r"(?i)(?:[\.\s\-_]+)" + re.escape(token) + r"(?:[\.\s\-_]+)?",
+            " ",
+            title_text,
+        )
+    title_text = _strip_release_group(title_text)
     title_text = normalize_title(title_text)
 
     if year is not None:

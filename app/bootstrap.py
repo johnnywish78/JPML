@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from app.database.connection import connect
 from app.database.schema import initialize as initialize_schema
@@ -107,7 +108,7 @@ def create_music_service() -> "MusicService":
 
 
 def create_metadata_integration() -> "LibraryMetadataIntegration":
-    """Composition of the metadata pipeline: provider registry (OMDb),
+    """Composition of the metadata pipeline: provider registry (TMDB + OMDb),
     metadata service and music service."""
     from app.config import load_config
     from app.metadata.library_integration import LibraryMetadataIntegration
@@ -115,6 +116,7 @@ def create_metadata_integration() -> "LibraryMetadataIntegration":
     from app.metadata.registry import MetadataProviderRegistry
     from app.metadata.repository import MetadataRepository
     from app.metadata.service import MetadataService
+    from app.metadata.tmdb_provider import TmdbMetadataProvider
     from app.services.music import MusicService
     from app.library.music_repository import MusicRepository
 
@@ -122,7 +124,16 @@ def create_metadata_integration() -> "LibraryMetadataIntegration":
     config = load_config()
 
     registry = MetadataProviderRegistry()
-    registry.register(OMDbMetadataProvider(config=config.omdb))
+
+    # Register TMDB first (primary discovery + metadata provider)
+    if config.tmdb.api_key:
+        registry.register(TmdbMetadataProvider(config=config.tmdb))
+
+    # Register OMDb (secondary enrichment when IMDb ID is known)
+    if config.omdb.api_key:
+        registry.register(OMDbMetadataProvider(config=config.omdb))
+
+    artwork_dir = Path(__file__).resolve().parents[1] / "assets" / "artwork"
 
     metadata_service = MetadataService(
         MetadataRepository(conn),
@@ -131,7 +142,9 @@ def create_metadata_integration() -> "LibraryMetadataIntegration":
     music_service = MusicService(MusicRepository(conn))
 
     return LibraryMetadataIntegration(
-        metadata_service, music_service=music_service
+        metadata_service,
+        music_service=music_service,
+        artwork_dir=artwork_dir,
     )
 
 

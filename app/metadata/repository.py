@@ -414,6 +414,46 @@ class MetadataRepository:
         return [str(row[0]) for row in rows]
 
 
+    def find_movie_by_title(
+        self,
+        *,
+        title: str,
+        year: int | None = None,
+    ) -> int | None:
+        """Return an existing movie id when title matches (and year when
+        provided), otherwise None."""
+        if year is not None:
+            row = self.connection.execute(
+                "SELECT id FROM movies WHERE title = ? AND year = ?",
+                (title, year),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                "SELECT id FROM movies WHERE title = ?",
+                (title,),
+            ).fetchone()
+        return int(row["id"]) if row is not None else None
+
+    def find_tv_show_by_title(
+        self,
+        *,
+        title: str,
+        year: int | None = None,
+    ) -> int | None:
+        """Return an existing tv_show id when title matches (and year when
+        provided), otherwise None."""
+        if year is not None:
+            row = self.connection.execute(
+                "SELECT id FROM tv_shows WHERE title = ? AND year = ?",
+                (title, year),
+            ).fetchone()
+        else:
+            row = self.connection.execute(
+                "SELECT id FROM tv_shows WHERE title = ?",
+                (title,),
+            ).fetchone()
+        return int(row["id"]) if row is not None else None
+
     def create_movie(self, *, title: str, year: int | None = None) -> int:
         cursor = self.connection.execute(
             "INSERT INTO movies(title, year) VALUES (?, ?)",
@@ -492,6 +532,8 @@ class MetadataRepository:
         title: str | None = None,
         year: int | None = None,
         overview: str | None = None,
+        tmdb_id: int | None = None,
+        imdb_id: str | None = None,
     ) -> None:
         table = {
             "movie": "movies",
@@ -501,16 +543,29 @@ class MetadataRepository:
         if table is None:
             raise ValueError(f"Unsupported entity type: {entity_type}")
 
+        sets: list[str] = []
+        params: list[Any] = []
+        if title is not None:
+            sets.append("title = COALESCE(?, title)")
+            params.append(title)
+        if year is not None:
+            sets.append("year = COALESCE(?, year)")
+            params.append(year)
+        if overview is not None:
+            sets.append("overview = COALESCE(?, overview)")
+            params.append(overview)
+        if tmdb_id is not None:
+            sets.append("tmdb_id = COALESCE(?, tmdb_id)")
+            params.append(tmdb_id)
+        if imdb_id is not None:
+            sets.append("imdb_id = COALESCE(?, imdb_id)")
+            params.append(imdb_id)
+        sets.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(entity_id)
+
         self.connection.execute(
-            f"""
-            UPDATE {table}
-            SET title = COALESCE(?, title),
-                year = COALESCE(?, year),
-                overview = COALESCE(?, overview),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (title, year, overview, entity_id),
+            f"UPDATE {table} SET {', '.join(sets)} WHERE id = ?",
+            params,
         )
         self.connection.commit()
 
@@ -551,4 +606,129 @@ class MetadataRepository:
                 int(user_override),
             ),
         )
+        self.connection.commit()
+
+    # ------------------------------------------------------------------ #
+    # People / cast
+    # ------------------------------------------------------------------ #
+
+    def upsert_person(
+        self,
+        *,
+        name: str,
+        tmdb_id: int | None = None,
+        imdb_id: str | None = None,
+        biography: str | None = None,
+    ) -> int:
+        """Insert or return existing person by tmdb_id / imdb_id / name."""
+        if tmdb_id is not None:
+            row = self.connection.execute(
+                "SELECT id FROM people WHERE tmdb_id = ?", (tmdb_id,)
+            ).fetchone()
+            if row is not None:
+                return int(row["id"])
+        if imdb_id is not None:
+            row = self.connection.execute(
+                "SELECT id FROM people WHERE imdb_id = ?", (imdb_id,)
+            ).fetchone()
+            if row is not None:
+                return int(row["id"])
+        # Fall back to name-based dedup
+        row = self.connection.execute(
+            "SELECT id FROM people WHERE name = ?", (name,)
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+
+        cursor = self.connection.execute(
+            """
+            INSERT INTO people (name, tmdb_id, imdb_id, biography)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, tmdb_id, imdb_id, biography),
+        )
+        self.connection.commit()
+        return int(cursor.lastrowid)
+
+    def add_person_relationship(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        person_id: int,
+        character: str | None = None,
+        role: str | None = None,
+    ) -> None:
+        table = {
+            "movie": "movie_people",
+            "tv": "tv_people",
+        }.get(entity_type)
+        if table is None:
+            return
+
+        id_col = "movie_id" if table == "movie_people" else "tv_show_id"
+        # Only include character/role if the table has those columns
+        col_names = [c[0] for c in self.connection.execute(f"PRAGMA table_info({table})").fetchall()]
+        cols = [id_col, "person_id"]
+        vals = [entity_id, person_id]
+        if "character_name" in col_names:
+            cols.append("character_name")
+            vals.append(character)
+        if "role" in col_names:
+            cols.append("role")
+            vals.append(role)
+        placeholders = ", ".join("?" * len(cols))
+        self.connection.execute(
+            f"INSERT OR IGNORE INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+            vals,
+        )
+        self.connection.commit()
+
+    # ------------------------------------------------------------------ #
+    # Artwork upsert
+    # ------------------------------------------------------------------ #
+
+    def upsert_artwork(
+        self,
+        *,
+        entity_type: str,
+        entity_id: int,
+        artwork_type: str,
+        provider: str,
+        local_path: str | None = None,
+        provider_path: str | None = None,
+    ) -> None:
+        """Insert or update an artwork row. Idempotent per (entity_type,
+        entity_id, artwork_type, provider)."""
+        existing = self.connection.execute(
+            """
+            SELECT id FROM artwork
+            WHERE entity_type = ? AND entity_id = ?
+              AND artwork_type = ? AND provider = ?
+            """,
+            (entity_type, entity_id, artwork_type, provider),
+        ).fetchone()
+
+        if existing is None:
+            self.connection.execute(
+                """
+                INSERT INTO artwork
+                    (entity_type, entity_id, artwork_type, provider,
+                     provider_path, local_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (entity_type, entity_id, artwork_type, provider,
+                 provider_path, local_path),
+            )
+        else:
+            self.connection.execute(
+                """
+                UPDATE artwork SET
+                    provider_path = COALESCE(?, provider_path),
+                    local_path = COALESCE(?, local_path),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (provider_path, local_path, existing["id"]),
+            )
         self.connection.commit()
