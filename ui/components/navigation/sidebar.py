@@ -28,12 +28,14 @@ class NavItem:
 LIBRARY_SECTION = "LIBRARY"
 DISCOVER_SECTION = "DISCOVER"
 MY_LIBRARY_SECTION = "MY LIBRARY"
+SERVICES_SECTION = "SERVICES"
 
 NAV_ITEMS: dict[str, list[NavItem]] = {
     LIBRARY_SECTION: [
         NavItem("home", "Home", "⌂"),
         NavItem("movies", "Movies", "▣"),
         NavItem("tv_shows", "TV Shows", "▤"),
+        NavItem("tv_time", "TV Time", "▶"),
         NavItem("people", "People", "♟"),
         NavItem("music", "Music", "♫"),
         NavItem("library", "Library", "⊞"),
@@ -46,6 +48,10 @@ NAV_ITEMS: dict[str, list[NavItem]] = {
         NavItem("favorites", "Favorites", "♥"),
         NavItem("watchlist", "Watchlist", "+"),
         NavItem("collections", "Collections", "⧉"),
+    ],
+    SERVICES_SECTION: [
+        NavItem("browser", "Browser", "🌐"),
+        NavItem("services", "Services", "⚡"),
     ],
 }
 

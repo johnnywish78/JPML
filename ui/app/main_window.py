@@ -27,6 +27,7 @@ from ui.components.navigation.sidebar import (
     DISCOVER_SECTION,
     LIBRARY_SECTION,
     MY_LIBRARY_SECTION,
+    SERVICES_SECTION,
     NAV_ITEMS,
     Sidebar,
 )
@@ -51,9 +52,13 @@ def _route_title(route: Route) -> tuple[str, str]:
         }[route.screen]
         crumb = base
         title = str(route.params.get("title") or base)
+    elif route.screen == "services":
+        title, crumb = "Services", section.lower() if section else ""
+    elif route.screen == "browser":
+        title, crumb = "Browser", section.lower() if section else ""
     else:
         label = route.screen
-        for section_name in (LIBRARY_SECTION, DISCOVER_SECTION, MY_LIBRARY_SECTION):
+        for section_name in (LIBRARY_SECTION, DISCOVER_SECTION, MY_LIBRARY_SECTION, SERVICES_SECTION):
             for item in NAV_ITEMS.get(section_name, []):
                 if item.route == route.screen:
                     label = item.label
@@ -161,8 +166,20 @@ class MainWindow(QMainWindow):
 
     def set_theme_manager(self, manager: ThemeManager, mode: ThemeMode) -> None:
         self.theme_manager = manager
-        manager.theme_changed.connect(self._on_theme_changed)
+        # Load saved theme from config if available
+        try:
+            from app.config import load_config
+            config = load_config()
+            saved_theme = getattr(config, "theme", "dark")
+            if saved_theme in ("dark", "light", "system"):
+                manager.set_mode(saved_theme, apply=True)
+                return
+        except Exception:
+            pass
         manager.set_mode(mode)
+        manager.refresh()
+        self.navigation.route_changed.connect(self._on_route_changed)
+        manager.theme_changed.connect(self._on_theme_changed)
 
     def _on_theme_changed(self, theme_name: str) -> None:
         for widget in self._screens.values():

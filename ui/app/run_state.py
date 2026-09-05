@@ -35,6 +35,7 @@ def register_all(window: MainWindow, player_backend: str) -> None:
     Player selection is backend-agnostic: the PlayerScreen talks to
     PlayerController, which owns the concrete backend (vlc/mpv/mock).
     """
+    from ui.screens.browser import BrowserScreen
     from ui.screens.collections import CollectionsScreen
     from ui.screens.details import DetailsScreen
     from ui.screens.favorites import FavoritesScreen
@@ -47,14 +48,17 @@ def register_all(window: MainWindow, player_backend: str) -> None:
     from ui.screens.recommendations import RecommendationsScreen
     from ui.screens.search import SearchScreen
     from ui.screens.settings import SettingsScreen
+    from ui.screens.services import ServicesScreen
     from ui.screens.statistics import StatisticsScreen
     from ui.screens.trending import TrendingScreen
     from ui.screens.tv_shows import TvShowsScreen
+    from ui.screens.tv_time import TvTimeScreen
     from ui.screens.watchlist import WatchlistScreen
 
     window.register_screen("home", lambda ctx: HomeScreen(ctx))
     window.register_screen("movies", lambda ctx: MoviesScreen(ctx))
     window.register_screen("tv_shows", lambda ctx: TvShowsScreen(ctx))
+    window.register_screen("tv_time", lambda ctx: TvTimeScreen(ctx))
     window.register_screen("people", lambda ctx: PeopleScreen(ctx))
     window.register_screen("music", lambda ctx: MusicScreen(ctx))
     window.register_screen("library", lambda ctx: LibraryScreen(ctx))
@@ -67,6 +71,8 @@ def register_all(window: MainWindow, player_backend: str) -> None:
     window.register_screen("details", lambda ctx: DetailsScreen(ctx))
     window.register_screen("statistics", lambda ctx: StatisticsScreen(ctx))
     window.register_screen("settings", lambda ctx: SettingsScreen(ctx))
+    window.register_screen("services", lambda ctx: ServicesScreen(ctx))
+    window.register_screen("browser", lambda ctx: BrowserScreen(ctx))
 
     def _player_factory(ctx):
         return PlayerScreen(ctx, backend_name=player_backend)

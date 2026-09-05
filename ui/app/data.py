@@ -54,6 +54,14 @@ def _artwork_for(metadata_repo, entity_type: str, entity_id: int, kind: str):
 def _enrich(ref: EntityRef, metadata_repo, kind: str) -> EntityRef:
     art_kind = "backdrop" if kind == "backdrop" else "poster"
     ref.artwork = _artwork_for(metadata_repo, ref.kind, ref.entity_id, art_kind)
+    # Also populate backdrop for hero use
+    backdrop_row = next(
+        (r for r in _safe(lambda: metadata_repo.list_artwork(ref.kind, ref.entity_id), [])
+         if r.get("artwork_type") == "backdrop"),
+        None,
+    )
+    if backdrop_row:
+        ref.extra["backdrop"] = backdrop_row
     return ref
 
 
@@ -200,7 +208,7 @@ def fetch_tv_shows(services) -> list[EntityRef]:
 
 def fetch_people(services) -> list[EntityRef]:
     rows = _safe(lambda: services.search.search_people("", limit=100000), [])
-    return [
+    refs = [
         EntityRef(
             kind="person",
             entity_id=r.entity_id,
@@ -211,6 +219,10 @@ def fetch_people(services) -> list[EntityRef]:
         )
         for r in rows
     ]
+    # Enrich with person artwork
+    for ref in refs:
+        ref.artwork = _artwork_for(services.metadata_repository, "person", ref.entity_id, "person")
+    return refs
 
 
 def _sort_refs(services, refs: list[EntityRef], sort: str) -> list[EntityRef]:
@@ -649,8 +661,10 @@ def entity_ref_for_details(services, kind: str, entity_id: int) -> EntityRef | N
         rows = _safe(lambda: services.search.search_people("", limit=100000), [])
         for row in rows:
             if row.entity_id == entity_id:
-                return EntityRef(kind="person", entity_id=entity_id, title=row.title,
+                ref = EntityRef(kind="person", entity_id=entity_id, title=row.title,
                                  overview=row.overview, artwork_kind="person")
+                ref.artwork = _artwork_for(services.metadata_repository, "person", entity_id, "person")
+                return ref
     return None
 
 
@@ -662,25 +676,83 @@ def fetch_tv_genres(services, tv_id: int) -> list[str]:
     return _safe(lambda: services.metadata_repository.get_tv_genres(tv_id), [])
 
 
+def fetch_external_ids(services, kind: str, entity_id: int) -> list[dict]:
+    return _safe(
+        lambda: services.metadata_repository.list_external_ids(kind, entity_id),
+        [],
+    )
+
+
+def fetch_people_by_entity(services, kind: str, entity_id: int) -> list[dict]:
+    """Return people associated with a movie or TV show."""
+    return _safe(
+        lambda: services.metadata_repository.list_people_by_entity(kind, entity_id),
+        [],
+    )
+
+
 def resolve_play_file(services, ref: EntityRef) -> str | None:
     """Resolve a real, existing playable file for an entity.
 
-    Uses only frozen read contracts. Returns None when no usable file can
-    be found (the UI then shows the unavailable-file state instead of
-    pretending playback succeeded).
-
-    Resolution order:
-      1. A known file_path on the ref (from Continue Watching / playback
-         history) that still exists on disk.
-      2. For music: MusicRepository.list_files_for_track().
-      3. A file in playback history for the same entity that still exists.
-      4. A deterministic filename match across the library (the identifier
-         derives titles from filenames, so the library's own naming is the
-         signal). Shortest matching filename wins.
+    Uses actual DB relationships first:
+      - Movie → movie_files → media_files
+      - Episode → episode_files → media_files
+      - Track → music_repository.list_files_for_track
+      - Fallback: playback history, then filename matching
     """
     if ref.file_path and os.path.isfile(ref.file_path):
         return ref.file_path
 
+    # 1. Try DB relationships first
+    if ref.kind == "movie":
+        from app.bootstrap import _initialized_connection
+        conn = _initialized_connection()
+        row = conn.execute(
+            """
+            SELECT mf.path FROM movie_files mfv
+            JOIN media_files mf ON mf.id = mfv.media_file_id
+            WHERE mfv.movie_id = ?
+            LIMIT 1
+            """,
+            (ref.entity_id,),
+        ).fetchone()
+        if row and row["path"] and os.path.isfile(row["path"]):
+            return row["path"]
+
+    elif ref.kind == "episode":
+        from app.bootstrap import _initialized_connection
+        conn = _initialized_connection()
+        row = conn.execute(
+            """
+            SELECT mf.path FROM episode_files ef
+            JOIN media_files mf ON mf.id = ef.media_file_id
+            WHERE ef.episode_id = ?
+            LIMIT 1
+            """,
+            (ref.entity_id,),
+        ).fetchone()
+        if row and row["path"] and os.path.isfile(row["path"]):
+            return row["path"]
+
+    # 2. For TV shows, find any episode file
+    elif ref.kind == "tv":
+        from app.bootstrap import _initialized_connection
+        conn = _initialized_connection()
+        row = conn.execute(
+            """
+            SELECT DISTINCT mf.path FROM episodes e
+            JOIN seasons s ON s.id = e.season_id
+            JOIN episode_files ef ON ef.episode_id = e.id
+            JOIN media_files mf ON mf.id = ef.media_file_id
+            WHERE s.tv_show_id = ?
+            LIMIT 1
+            """,
+            (ref.entity_id,),
+        ).fetchone()
+        if row and row["path"] and os.path.isfile(row["path"]):
+            return row["path"]
+
+    # 3. Music track
     if ref.kind == "track":
         files = _safe(lambda: services.music_repository.list_files_for_track(ref.entity_id), [])
         for f in files:
@@ -688,28 +760,30 @@ def resolve_play_file(services, ref: EntityRef) -> str | None:
                 return f.path
         return None
 
-    if ref.kind in ("movie", "tv", "episode"):
-        for cand in _safe(lambda: services.playback_repository.get_resume_candidates(500), []):
-            if (
-                str(cand.get("media_type")) == ref.kind
-                and int(cand.get("media_id")) == ref.entity_id
-                and cand.get("file_path")
-                and os.path.isfile(str(cand["file_path"]))
-            ):
-                return str(cand["file_path"])
-        title = (ref.title or "").strip().lower()
-        if title:
-            files = _safe(lambda: services.media_repository.list_all(), [])
-            candidates = [
-                f
-                for f in files
-                if f.path and title in (f.filename or "").lower()
-            ]
-            if candidates:
-                candidates.sort(key=lambda f: (len(f.filename or ""), f.path))
-                best = candidates[0]
-                if os.path.isfile(best.path):
-                    return best.path
+    # 4. Playback history fallback
+    for cand in _safe(lambda: services.playback_repository.get_resume_candidates(500), []):
+        if (
+            str(cand.get("media_type")) == ref.kind
+            and int(cand.get("media_id")) == ref.entity_id
+            and cand.get("file_path")
+            and os.path.isfile(str(cand["file_path"]))
+        ):
+            return str(cand["file_path"])
+
+    # 5. Filename matching as last resort
+    title = (ref.title or "").strip().lower()
+    if title:
+        files = _safe(lambda: services.media_repository.list_all(), [])
+        candidates = [
+            f
+            for f in files
+            if f.path and title in (f.filename or "").lower()
+        ]
+        if candidates:
+            candidates.sort(key=lambda f: (len(f.filename or ""), f.path))
+            best = candidates[0]
+            if os.path.isfile(best.path):
+                return best.path
     return None
 
 

@@ -1,17 +1,8 @@
 """Details — media hero, metadata, actions, similar items.
 
-Displays only what the frozen backend contracts expose:
-  movie/tv → title, year, overview, genres, backdrop/poster, progress,
-             similar ("Recommendations for this item")
-  album    → artwork, title, artist, year, track list (filtered from the
-             frozen track listing)
-  artist   → name, biography, albums
-  track    → title, artist, album, play action
-  person   → name, biography
-
-Season/episode browsing and cast/crew lists are NOT rendered because the
-frozen backend exposes no read API for them (documented limitation — see
-final report).
+Displays title, year, overview, genres, backdrop/poster, progress,
+external IDs (IMDb/TMDB), cast/crew, similar items, and for TV shows:
+seasons and episodes.
 """
 from __future__ import annotations
 
@@ -28,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from ui.app import data
 from ui.app.screen_actions import ScreenActions
+from ui.components.cards.person_card import PersonCard
 from ui.components.common.page_header import PageHeader
 from ui.components.common.screen import BaseScreen
 from ui.components.media.artwork import Artwork
@@ -56,7 +48,7 @@ class DetailsScreen(BaseScreen, ScreenActions):
     def on_activated(self) -> None:
         if self._scan_in_progress():
             self._begin_watch_scan()
-            self.show_scanning("Scanning your library…")
+            self.show_scanning("Scanning your library...")
             return
         self._stop_watching_scan()
         route = self.context.navigation.current_route
@@ -72,16 +64,27 @@ class DetailsScreen(BaseScreen, ScreenActions):
     def _gather(self, services):
         ref = data.entity_ref_for_details(services, self._kind, self._entity_id)
         extra: dict = {}
-        if self._kind == "movie":
-            extra["genres"] = data.fetch_movie_genres(services, self._entity_id)
+        if self._kind in ("movie", "tv"):
+            extra["genres"] = (
+                data.fetch_movie_genres(services, self._entity_id)
+                if self._kind == "movie"
+                else data.fetch_tv_genres(services, self._entity_id)
+            )
             extra["similar"] = (
                 data.fetch_similar(services, ref) if ref is not None else []
             )
-        elif self._kind == "tv":
-            extra["genres"] = data.fetch_tv_genres(services, self._entity_id)
-            extra["similar"] = (
-                data.fetch_similar(services, ref) if ref is not None else []
+            extra["external_ids"] = data.fetch_external_ids(
+                services, self._kind, self._entity_id
             )
+            extra["people"] = data.fetch_people_by_entity(
+                services, self._kind, self._entity_id
+            )
+            if self._kind == "tv":
+                seasons = services.metadata_repository.list_seasons(self._entity_id)
+                extra["seasons"] = seasons
+                # Fetch episodes for each season
+                for season in seasons:
+                    season["episodes"] = services.metadata_repository.list_episodes(season["id"])
         elif self._kind == "album":
             all_tracks = data.fetch_tracks(services)
             extra["tracks"] = [
@@ -154,9 +157,41 @@ class DetailsScreen(BaseScreen, ScreenActions):
                     "background: transparent;"
                 )
                 self.add_to_content(chips)
+
+            # External IDs
+            external_ids = extra.get("external_ids") or []
+            if external_ids:
+                id_labels = []
+                for eid in external_ids:
+                    provider = eid.get("provider", "")
+                    ext_id = eid.get("external_id", "")
+                    if provider == "imdb" and ext_id:
+                        id_labels.append(f"IMDb: {ext_id}")
+                    elif provider == "tmdb" and ext_id:
+                        id_labels.append(f"TMDB: {ext_id}")
+                if id_labels:
+                    ids_label = QLabel("  ·  ".join(id_labels))
+                    ids_label.setObjectName("SecondaryLabel")
+                    ids_label.setStyleSheet(
+                        f"font-size: {Typography.METADATA_PX}px; margin-top: 6px; "
+                        "background: transparent;"
+                    )
+                    self.add_to_content(ids_label)
+
+            # Cast / crew
+            people = extra.get("people") or []
+            if people:
+                self._cast_row(people)
+
             similar = extra.get("similar") or []
             if similar:
                 self._section_row("You Might Also Like", similar)
+
+            # TV seasons
+            if ref.kind == "tv":
+                seasons = extra.get("seasons") or []
+                if seasons:
+                    self._seasons_row(seasons)
         elif ref.kind == "album":
             tracks = extra.get("tracks") or []
             if tracks:
@@ -165,6 +200,17 @@ class DetailsScreen(BaseScreen, ScreenActions):
             albums = extra.get("albums") or []
             if albums:
                 self._section_row("Albums", albums, square=True)
+        elif ref.kind == "person":
+            # Show person bio if available
+            if getattr(ref, "overview", None):
+                bio = QLabel(ref.overview)
+                bio.setWordWrap(True)
+                bio.setFixedWidth(640)
+                bio.setStyleSheet(
+                    f"font-size: {Typography.METADATA_PX}px; color: #A7ABB5; "
+                    "background: transparent;"
+                )
+                self.add_to_content(bio)
 
     def _media_header(self, ref: EntityRef) -> QWidget:
         header = QWidget()
@@ -236,6 +282,67 @@ class DetailsScreen(BaseScreen, ScreenActions):
         layout.addWidget(text)
         layout.addStretch(1)
         return header
+
+    def _cast_row(self, people: list[dict]) -> None:
+        """Render cast/crew as a horizontal scrollable row."""
+        header = SectionHeader("Cast & Crew")
+        self.add_to_content(header)
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(Spacing.M)
+        for person in people[:20]:
+            card = PersonCard(120, parent=row)
+            person_ref = EntityRef(
+                kind="person",
+                entity_id=person["id"],
+                title=person["name"],
+                overview=person.get("biography"),
+                artwork_kind="person",
+            )
+            if person.get("artwork"):
+                person_ref.artwork = person["artwork"]
+            card.set_entity(person_ref)
+            card.details_requested.connect(
+                lambda r=person_ref: self.open_details(r)
+            )
+            lay.addWidget(card)
+        self.add_to_content(row)
+
+    def _seasons_row(self, seasons: list[dict]) -> None:
+        """Render seasons as sections with episodes."""
+        for season in seasons:
+            season_num = season.get("season_number", 0)
+            season_header = SectionHeader(f"Season {season_num}")
+            self.add_to_content(season_header)
+
+            episodes = season.get("episodes") or []
+            for ep in episodes:
+                ep_widget = QWidget()
+                ep_lay = QHBoxLayout(ep_widget)
+                ep_lay.setContentsMargins(Spacing.M, Spacing.S, Spacing.M, Spacing.S)
+
+                ep_num = QLabel(f"E{ep.get('episode_number', 0):02d}")
+                ep_num.setFixedWidth(50)
+                ep_num.setStyleSheet(
+                    f"font-size: {Typography.METADATA_PX}px; font-weight: 600; "
+                    "background: transparent;"
+                )
+                ep_title = QLabel(ep.get("title") or f"Episode {ep.get('episode_number', 0)}")
+                ep_title.setStyleSheet(
+                    f"font-size: {Typography.CARD_PX}px; background: transparent;"
+                )
+                ep_lay.addWidget(ep_num)
+                ep_lay.addWidget(ep_title)
+                if ep.get("overview"):
+                    ep_overview = QLabel(ep["overview"][:100] + ("..." if len(ep["overview"]) > 100 else ""))
+                    ep_overview.setObjectName("SecondaryLabel")
+                    ep_overview.setStyleSheet(
+                        f"font-size: {Typography.METADATA_PX}px; background: transparent;"
+                    )
+                    ep_lay.addWidget(ep_overview)
+                ep_lay.addStretch(1)
+                self.add_to_content(ep_widget)
 
     def _section_row(
         self, title: str, items: list[EntityRef], square: bool = False

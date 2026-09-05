@@ -732,3 +732,95 @@ class MetadataRepository:
                 (provider_path, local_path, existing["id"]),
             )
         self.connection.commit()
+
+    def list_people_by_entity(
+        self,
+        entity_type: str,
+        entity_id: int,
+    ) -> list[dict[str, Any]]:
+        """Return people associated with a movie or TV show, including
+        character/role information and person artwork."""
+        table = {
+            "movie": "movie_people",
+            "tv": "tv_people",
+        }.get(entity_type)
+        if table is None:
+            return []
+
+        id_col = "movie_id" if table == "movie_people" else "tv_show_id"
+        col_names = [c[0] for c in self.connection.execute(f"PRAGMA table_info({table})").fetchall()]
+        char_col = "character_name" if "character_name" in col_names else ("character" if "character" in col_names else None)
+
+        select_parts = ["p.id", "p.name", "p.biography", "p.tmdb_id"]
+        if char_col:
+            select_parts.append(f"mp.{char_col} AS character")
+        if "role" in col_names:
+            select_parts.append("mp.role")
+        order_clause = ""
+        if "order" in col_names:
+            order_clause = 'ORDER BY CASE WHEN mp."order" IS NOT NULL THEN CAST(mp."order" AS INTEGER) ELSE 9999 END, p.name'
+        else:
+            order_clause = "ORDER BY p.name"
+
+        rows = self.connection.execute(
+            f"""
+            SELECT {", ".join(select_parts)}
+            FROM {table} mp
+            JOIN people p ON p.id = mp.person_id
+            WHERE mp.{id_col} = ?
+            {order_clause}
+            """,
+            (entity_id,),
+        ).fetchall()
+
+        result = []
+        for row in rows:
+            person_artwork = self.list_artwork("person", row["id"])
+            d: dict[str, Any] = {
+                "id": row["id"],
+                "name": row["name"],
+                "biography": row["biography"],
+                "tmdb_id": row["tmdb_id"],
+            }
+            if char_col:
+                d["character"] = row["character"]
+            if "role" in col_names:
+                d["role"] = row["role"]
+            d["artwork"] = person_artwork[0] if person_artwork else None
+            result.append(d)
+        return result
+
+    def list_seasons(
+        self,
+        tv_show_id: int,
+    ) -> list[dict[str, Any]]:
+        """Return seasons for a TV show."""
+        rows = self.connection.execute(
+            "SELECT id, tv_show_id, season_number FROM seasons WHERE tv_show_id = ? ORDER BY season_number",
+            (tv_show_id,),
+        ).fetchall()
+        return [
+            {"id": r["id"], "tv_show_id": r["tv_show_id"], "season_number": r["season_number"]}
+            for r in rows
+        ]
+
+    def list_episodes(
+        self,
+        season_id: int,
+    ) -> list[dict[str, Any]]:
+        """Return episodes for a season."""
+        rows = self.connection.execute(
+            "SELECT id, season_id, episode_number, title, overview, air_date FROM episodes WHERE season_id = ? ORDER BY episode_number",
+            (season_id,),
+        ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "season_id": r["season_id"],
+                "episode_number": r["episode_number"],
+                "title": r["title"],
+                "overview": r["overview"],
+                "air_date": r["air_date"],
+            }
+            for r in rows
+        ]

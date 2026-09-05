@@ -36,6 +36,7 @@ class JPMLConfig:
     tmdb: TmdbConfig = field(default_factory=TmdbConfig)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     player_backend: str = "vlc"
+    theme: str = "dark"
 
 
 def load_config(config_path: Path | None = None) -> JPMLConfig:
@@ -89,6 +90,9 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
         )
 
     player_backend = str(raw.get("player_backend", "vlc")).strip().lower()
+    theme = str(raw.get("theme", "dark")).strip().lower()
+    if theme not in ("dark", "light", "system"):
+        theme = "dark"
 
     return JPMLConfig(
         omdb=OmdbConfig(
@@ -105,4 +109,35 @@ def load_config(config_path: Path | None = None) -> JPMLConfig:
         ),
         discovery=DiscoveryConfig(trending_provider=trending_provider),
         player_backend=player_backend,
+        theme=theme,
     )
+
+
+def save_config(config: JPMLConfig, config_path: Path | None = None) -> None:
+    """Persist config to jpml_config.json."""
+    if config_path is None:
+        config_path = _PROJECT_ROOT / _CONFIG_FILENAME
+    raw: dict[str, object] = {}
+    if config_path.is_file():
+        try:
+            raw = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            raw = {}
+    raw["omdb"] = {
+        "api_key": config.omdb.api_key,
+        "base_url": config.omdb.base_url,
+        "timeout": config.omdb.timeout,
+    }
+    raw["tmdb"] = {
+        "api_key": config.tmdb.api_key,
+        "base_url": config.tmdb.base_url,
+        "image_base": config.tmdb.image_base,
+        "backdrop_image_base": config.tmdb.backdrop_image_base,
+        "timeout": config.tmdb.timeout,
+    }
+    raw["discovery"] = {
+        "trending_provider": config.discovery.trending_provider,
+    }
+    raw["player_backend"] = config.player_backend
+    raw["theme"] = config.theme
+    config_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
